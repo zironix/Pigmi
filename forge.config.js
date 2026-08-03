@@ -14,6 +14,12 @@ module.exports = {
     appCopyright: 'Copyright © 2026 Oleg Pavlov',
     executableName: 'Pigmi',
     appBundleId: 'com.zironix.pigmi',
+    osxSign: {
+      identity: '-',
+      identityValidation: false,
+      preAutoEntitlements: false,
+      timestamp: 'none',
+    },
   },
   rebuildConfig: {},
   makers: [

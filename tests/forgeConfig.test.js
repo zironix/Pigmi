@@ -7,6 +7,15 @@ function maker(name) {
 }
 
 describe('Electron Forge configuration', () => {
+  it('re-signs the final macOS bundle after changing Electron metadata', () => {
+    expect(forgeConfig.packagerConfig.osxSign).toEqual({
+      identity: '-',
+      identityValidation: false,
+      preAutoEntitlements: false,
+      timestamp: 'none',
+    });
+  });
+
   it('uses the packaged executable name in Linux distributables', () => {
     const executableName = forgeConfig.packagerConfig.executableName;
 

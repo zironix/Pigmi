@@ -433,8 +433,9 @@ Linux Debian packaging may require `fakeroot` and `dpkg` when they are not alrea
 sudo apt-get install fakeroot dpkg
 ```
 
-Code signing and notarization are intentionally separate release concerns and are not configured
-in the public repository. Local builds are unsigned.
+macOS bundles receive a final ad-hoc signature so their metadata and sealed resources remain
+internally consistent. Apple Developer ID signing, notarization, and Windows Authenticode signing
+are separate release concerns and are not configured in the public repository.
 
 ## Publishing a GitHub release
 
@@ -457,8 +458,10 @@ To publish a version:
 For a tag-driven release, push a tag that exactly matches the package version, such as `v2.0.1`.
 The same workflow starts automatically. A mismatched tag fails before any packages are published.
 
-Release builds are currently unsigned. macOS Gatekeeper and Windows SmartScreen may therefore show
-a warning until platform signing certificates and notarization credentials are configured.
+macOS bundles are ad-hoc signed and verified before upload, preventing modified-bundle or
+"application is damaged" errors. They are not Apple Developer ID signed or notarized, so Gatekeeper
+may still require approval under **System Settings → Privacy & Security → Open Anyway** after the
+first launch. Windows builds are not Authenticode-signed, so SmartScreen may also show a warning.
 
 ## Development
 
