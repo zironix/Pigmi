@@ -1,0 +1,18 @@
+export const IPC_CHANNELS = Object.freeze({
+  selectFolder: 'select-folder',
+  selectImageFile: 'select-image-file',
+  readDirectory: 'read-dir',
+  fileExists: 'file-exists',
+  readTextFile: 'read-text-file',
+  writeTextFile: 'write-text-file',
+  writeBinaryFile: 'write-binary-file',
+  closeWindow: 'window-close',
+  minimizeWindow: 'window-minimize',
+  maximizeWindow: 'window-maximize',
+  isWindowMaximized: 'window-is-maximized',
+  openFolder: 'open-folder',
+  mcpInfo: 'mcp-info',
+  mcpRequest: 'mcp-request',
+  mcpResponse: 'mcp-response',
+  mcpStatus: 'mcp-status',
+});

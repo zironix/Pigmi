@@ -1,0 +1,73 @@
+{
+  "name": "pigmi",
+  "productName": "Pigmi",
+  "version": "2.0.0",
+  "description": "Cross-platform texture palette and PBR material map editor",
+  "main": ".vite/build/main.js",
+  "bin": {
+    "pigmi-mcp": "mcp/server.mjs"
+  },
+  "scripts": {
+    "start": "electron-forge start",
+    "mcp": "node mcp/server.mjs",
+    "build:mcp": "vite build --config vite.mcp.config.mjs",
+    "package": "npm run build:mcp && electron-forge package",
+    "make": "npm run build:mcp && electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "check": "npm run format:check && npm run lint && npm test && npm run package"
+  },
+  "keywords": [
+    "electron",
+    "palette",
+    "pbr",
+    "texture",
+    "vue",
+    "mcp"
+  ],
+  "author": {
+    "name": "Oleg",
+    "email": "ziritix@gmail.com"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "packageManager": "npm@10.9.8",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-deb": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
+    "@electron-forge/plugin-fuses": "^7.11.2",
+    "@electron-forge/plugin-vite": "^7.11.2",
+    "@electron/fuses": "^1.8.0",
+    "@eslint/js": "^10.0.1",
+    "@reforged/maker-appimage": "^5.2.0",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "electron": "43.2.0",
+    "eslint": "^10.8.0",
+    "eslint-plugin-vue": "^10.10.0",
+    "globals": "^17.8.0",
+    "prettier": "^3.9.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.65.0",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "electron-squirrel-startup": "^1.0.1",
+    "mitt": "^3.0.1",
+    "pinia": "^4.0.2",
+    "vue": "^3.5.40",
+    "vue-3-slider-component": "^1.0.2",
+    "vue-slicksort": "^2.0.5",
+    "vue3-select-component": "^1.0.1",
+    "zod": "^4.4.3"
+  }
+}

@@ -1,0 +1,90 @@
+@font-face {
+  font-family: 'Line Awesome Free';
+  font-style: normal;
+  font-weight: 900;
+  font-display: block;
+  src: url('./line-awesome-solid.woff2') format('woff2');
+}
+
+.la,
+.las {
+  display: inline-block;
+  font-family: 'Line Awesome Free';
+  font-style: normal;
+  font-variant: normal;
+  font-weight: 900;
+  line-height: 1;
+  text-rendering: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.la-bars::before {
+  content: '\f0c9';
+}
+.la-cog::before {
+  content: '\f013';
+}
+.la-compress-arrows-alt::before {
+  content: '\f78c';
+}
+.la-edit::before {
+  content: '\f044';
+}
+.la-expand::before {
+  content: '\f065';
+}
+.la-external-link-square-alt::before {
+  content: '\f360';
+}
+.la-eye::before {
+  content: '\f06e';
+}
+.la-eye-slash::before {
+  content: '\f070';
+}
+.la-folder::before {
+  content: '\f07b';
+}
+.la-folder-open::before {
+  content: '\f07c';
+}
+.la-image::before {
+  content: '\f03e';
+}
+.la-layer-group::before {
+  content: '\f5fd';
+}
+.la-lock::before {
+  content: '\f023';
+}
+.la-lock-open::before {
+  content: '\f3c1';
+}
+.la-meteor::before {
+  content: '\f753';
+}
+.la-minus::before {
+  content: '\f068';
+}
+.la-palette::before {
+  content: '\f53f';
+}
+.la-plus::before {
+  content: '\f067';
+}
+.la-robot::before {
+  content: '\f544';
+}
+.la-sliders-h::before {
+  content: '\f1de';
+}
+.la-times::before {
+  content: '\f00d';
+}
+.la-trash::before {
+  content: '\f2ed';
+}
+.la-unlock::before {
+  content: '\f09c';
+}
