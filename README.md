@@ -29,6 +29,7 @@ Pigmi runs on macOS, Windows, and Linux.
 - [MCP automation](#mcp-automation)
 - [Running from source](#running-from-source)
 - [Building for macOS, Windows, and Linux](#building-for-macos-windows-and-linux)
+- [Publishing a GitHub release](#publishing-a-github-release)
 - [Development](#development)
 - [Network and security](#network-and-security)
 - [License](#license)
@@ -434,6 +435,30 @@ sudo apt-get install fakeroot dpkg
 
 Code signing and notarization are intentionally separate release concerns and are not configured
 in the public repository. Local builds are unsigned.
+
+## Publishing a GitHub release
+
+The repository includes an automated release workflow that builds downloadable applications on
+native GitHub-hosted runners and attaches them to a GitHub Release. It produces:
+
+- a Windows x64 Squirrel installer (`.exe`);
+- macOS ZIP archives for Apple Silicon and Intel;
+- Linux x64 AppImage and Debian packages (`.AppImage` and `.deb`).
+
+To publish a version:
+
+1. Update `version` in both `package.json` and `package-lock.json`. Running
+   `npm version 2.0.1 --no-git-tag-version` updates both files together.
+2. Commit and push the version change to `main`.
+3. Open **Actions → Release** on GitHub, select **Run workflow**, choose `main`, and confirm.
+4. Wait for all four platform builds. When they succeed, the workflow creates the matching tag,
+   generates release notes, and publishes the binaries under **Releases**.
+
+For a tag-driven release, push a tag that exactly matches the package version, such as `v2.0.1`.
+The same workflow starts automatically. A mismatched tag fails before any packages are published.
+
+Release builds are currently unsigned. macOS Gatekeeper and Windows SmartScreen may therefore show
+a warning until platform signing certificates and notarization credentials are configured.
 
 ## Development
 

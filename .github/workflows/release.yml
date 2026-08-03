@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  metadata:
+    name: Release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: version
+        name: Validate version
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="v${version}"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" != "${tag}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${version}." >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-latest
+            arch: x64
+            artifact: pigmi-windows-x64
+          - label: macOS Apple Silicon
+            os: macos-latest
+            arch: arm64
+            artifact: pigmi-macos-arm64
+          - label: macOS Intel
+            os: macos-latest
+            arch: x64
+            artifact: pigmi-macos-x64
+          - label: Linux x64
+            os: ubuntu-latest
+            arch: x64
+            artifact: pigmi-linux-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build distributable packages
+        run: npm run make -- --arch=${{ matrix.arch }}
+
+      - name: Collect release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            out/make/**/*.exe
+            out/make/**/*.zip
+            out/make/**/*.deb
+            out/make/**/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: [metadata, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          mapfile -d '' files < <(find release-assets -type f -print0)
+          if (( ${#files[@]} == 0 )); then
+            echo "No release files were produced." >&2
+            exit 1
+          fi
+
+          options=(
+            --repo "${GITHUB_REPOSITORY}"
+            --title "Pigmi ${RELEASE_VERSION}"
+            --generate-notes
+          )
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            options+=(--verify-tag)
+          else
+            options+=(--target "${GITHUB_SHA}")
+          fi
+
+          gh release create "${RELEASE_TAG}" "${files[@]}" "${options[@]}"
