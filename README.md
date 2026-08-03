@@ -1,7 +1,7 @@
 # Pigmi
 
 <p align="center">
-  <img src="src/assets/logo.png" width="144" alt="Pigmi logo">
+  <img src="src/assets/icons/icon.png" width="160" alt="Pigmi logo">
 </p>
 
 <p align="center">
@@ -272,10 +272,72 @@ centering.
 ## MCP automation
 
 Pigmi does not bundle a model, AI account, or provider-specific client. Instead, it ships a
-standard stdio MCP server. Open the plug tab, copy the displayed configuration into a compatible
-client, and keep Pigmi running while the client works.
+standard stdio MCP server. Keep Pigmi running while an MCP client works: the application owns the
+active document, while the MCP process exposes focused read and edit tools to the client.
 
-For a development checkout, the configuration has this form:
+### Connect Pigmi to Codex
+
+Pigmi works with the Codex desktop app, Codex CLI, and the Codex IDE extension. These clients share
+the same MCP configuration. Node.js 20.19 or newer must be available on the system because Codex
+starts Pigmi's bundled MCP server as a local Node.js process.
+
+1. Start Pigmi and open the **plug** tab in the left sidebar.
+2. Copy the displayed **Codex CLI command**.
+3. Run the command in a terminal.
+4. Restart Codex. Keep Pigmi open whenever you want Codex to control it.
+5. In Codex, open `/mcp` to confirm that `pigmi` is enabled. Ask Codex to inspect the active Pigmi
+   document; the status in Pigmi changes from **Waiting** after the first tool call.
+
+The generated command uses the correct paths for the current installation and operating system:
+
+```bash
+codex mcp add pigmi -- node "<PIGMI_MCP_SERVER_PATH>" --connection-file "<PIGMI_CONNECTION_FILE>"
+```
+
+You can perform the same setup without a terminal. In Codex, open **Settings → MCP servers → Add
+server**, choose **STDIO**, use `node` as the command, and copy the arguments shown in Pigmi. Save
+the server and restart Codex.
+
+For manual configuration, paste the block shown in Pigmi into `~/.codex/config.toml`. Its form is:
+
+```toml
+[mcp_servers.pigmi]
+command = "node"
+args = [
+  "<PIGMI_MCP_SERVER_PATH>",
+  "--connection-file",
+  "<PIGMI_CONNECTION_FILE>"
+]
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+```
+
+The server and connection-file paths are intentionally not hardcoded in this README. They differ
+between development checkouts, installed applications, users, and operating systems; the plug tab
+always displays the correct values for the running Pigmi instance. The connection file contains a
+short-lived local token, so do not publish or share its contents.
+
+If Codex reports that Pigmi is not running, start Pigmi and retry the request. The MCP server reads
+the current connection information for every operation, so Pigmi can be restarted without editing
+the Codex configuration.
+
+### Other MCP clients
+
+For a client that expects the common JSON configuration shape, use the server and connection-file
+paths displayed in Pigmi:
+
+```json
+{
+  "mcpServers": {
+    "pigmi": {
+      "command": "node",
+      "args": ["<PIGMI_MCP_SERVER_PATH>", "--connection-file", "<PIGMI_CONNECTION_FILE>"]
+    }
+  }
+}
+```
+
+For a development checkout, the paths typically have this form:
 
 ```json
 {

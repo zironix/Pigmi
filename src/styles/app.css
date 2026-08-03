@@ -744,6 +744,15 @@ body {
   line-height: 1.5;
   white-space: pre;
 }
+.custom-input textarea.mcp-command {
+  min-height: 92px;
+}
+.mcp-description.mcp-or {
+  margin: 14px 0;
+}
+.mcp-description.mcp-note {
+  margin: 12px 0 0;
+}
 .mcp-capabilities {
   display: grid;
   gap: 9px;

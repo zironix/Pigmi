@@ -10,6 +10,7 @@ import { historyMethods } from './methods/historyMethods';
 import { mcpMethods } from './methods/mcpMethods';
 import { paletteMethods } from './methods/paletteMethods';
 import { uiMethods } from './methods/uiMethods';
+import { createCodexMcpCommand, createCodexMcpToml } from '../utils/mcpConfiguration';
 import '../assets/cssfont/audiowide/stylesheet.css';
 import '../assets/icon-font/line-awesome.css';
 import '../assets/cssfont/mono/stylesheet.css';
@@ -186,20 +187,18 @@ export default {
         ghostClass: 'ghost',
       };
     },
-    mcpConfiguration() {
-      if (!this.mcp.serverPath || !this.mcp.connectionFile) return '';
-      return JSON.stringify(
-        {
-          mcpServers: {
-            pigmi: {
-              command: 'node',
-              args: [this.mcp.serverPath, '--connection-file', this.mcp.connectionFile],
-            },
-          },
-        },
-        null,
-        2,
-      );
+    codexMcpCommand() {
+      return createCodexMcpCommand({
+        connectionFile: this.mcp.connectionFile,
+        platform: window.electronAPI?.platform,
+        serverPath: this.mcp.serverPath,
+      });
+    },
+    codexMcpConfiguration() {
+      return createCodexMcpToml({
+        connectionFile: this.mcp.connectionFile,
+        serverPath: this.mcp.serverPath,
+      });
     },
     canvasRenderedWidth() {
       return (this.texture?.width || 0) * (this.finalZoom || 1);

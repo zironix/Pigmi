@@ -663,8 +663,8 @@
       >
         <div class="mcp-heading">
           <div>
-            <div class="mcp-title">MCP server</div>
-            <div class="mcp-subtitle">Control Pigmi from any compatible AI client.</div>
+            <div class="mcp-title">Connect Codex</div>
+            <div class="mcp-subtitle">Let Codex inspect and edit the active Pigmi document.</div>
           </div>
           <span
             class="mcp-status"
@@ -681,14 +681,34 @@
         </div>
 
         <p class="mcp-description">
-          Add this configuration to your MCP client, keep Pigmi open, and let the client inspect or
-          edit the active document with granular tools.
+          Keep Pigmi open. The fastest setup is to run the command below in a terminal, then restart
+          Codex. Alternatively, open <strong>Settings → MCP servers → Add server</strong> and choose
+          <strong>STDIO</strong>.
         </p>
 
         <div class="custom-input">
-          <div class="name">Configuration</div>
-          <textarea class="mcp-config" :value="mcpConfiguration" rows="11" readonly></textarea>
+          <div class="name">Codex CLI command</div>
+          <textarea
+            class="mcp-config mcp-command"
+            :value="codexMcpCommand"
+            rows="5"
+            readonly
+          ></textarea>
         </div>
+
+        <p class="mcp-description mcp-or">
+          Or paste this into <strong>~/.codex/config.toml</strong>:
+        </p>
+
+        <div class="custom-input">
+          <div class="name">Codex config.toml</div>
+          <textarea class="mcp-config" :value="codexMcpConfiguration" rows="10" readonly></textarea>
+        </div>
+
+        <p class="mcp-description mcp-note">
+          Node.js 20.19 or newer is required. The status changes after Codex calls its first Pigmi
+          tool.
+        </p>
 
         <div class="mcp-capabilities">
           <div><i class="las la-search"></i> Selective document reads</div>
