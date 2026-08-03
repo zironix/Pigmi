@@ -79,7 +79,16 @@ jobs:
       - name: Verify macOS bundle signature
         if: runner.os == 'macOS'
         shell: bash
-        run: codesign --verify --deep --strict --verbose=2 "out/Pigmi-darwin-${{ matrix.arch }}/Pigmi.app"
+        run: |
+          app="out/Pigmi-darwin-${{ matrix.arch }}/Pigmi.app"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+
+          signature="$(codesign -dv --verbose=4 "${app}" 2>&1)"
+          echo "${signature}"
+          if grep -Eq 'flags=.*runtime' <<< "${signature}"; then
+            echo "Ad-hoc macOS releases must not enable Hardened Runtime." >&2
+            exit 1
+          fi
 
       - name: Collect release files
         uses: actions/upload-artifact@v7

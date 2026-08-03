@@ -434,8 +434,10 @@ sudo apt-get install fakeroot dpkg
 ```
 
 macOS bundles receive a final ad-hoc signature so their metadata and sealed resources remain
-internally consistent. Apple Developer ID signing, notarization, and Windows Authenticode signing
-are separate release concerns and are not configured in the public repository.
+internally consistent. Hardened Runtime is intentionally disabled for these unsigned builds:
+ad-hoc signatures do not provide the common Apple Team ID required by Electron Framework during
+App Translocation. Apple Developer ID signing, notarization, and Windows Authenticode signing are
+separate release concerns and are not configured in the public repository.
 
 ## Publishing a GitHub release
 
@@ -449,19 +451,21 @@ native GitHub-hosted runners and attaches them to a GitHub Release. It produces:
 To publish a version:
 
 1. Update `version` in both `package.json` and `package-lock.json`. Running
-   `npm version 2.0.1 --no-git-tag-version` updates both files together.
+   `npm version 2.0.2 --no-git-tag-version` updates both files together.
 2. Commit and push the version change to `main`.
 3. Open **Actions → Release** on GitHub, select **Run workflow**, choose `main`, and confirm.
 4. Wait for all four platform builds. When they succeed, the workflow creates the matching tag,
    generates release notes, and publishes the binaries under **Releases**.
 
-For a tag-driven release, push a tag that exactly matches the package version, such as `v2.0.1`.
+For a tag-driven release, push a tag that exactly matches the package version, such as `v2.0.2`.
 The same workflow starts automatically. A mismatched tag fails before any packages are published.
 
-macOS bundles are ad-hoc signed and verified before upload, preventing modified-bundle or
-"application is damaged" errors. They are not Apple Developer ID signed or notarized, so Gatekeeper
-may still require approval under **System Settings → Privacy & Security → Open Anyway** after the
-first launch. Windows builds are not Authenticode-signed, so SmartScreen may also show a warning.
+macOS bundles are ad-hoc signed and verified before upload. CI also ensures that Hardened Runtime
+is not accidentally enabled without a Developer ID, which would make Electron Framework fail to
+load on a quarantined app. These builds are not Apple Developer ID signed or notarized, so
+Gatekeeper may still require approval under **System Settings → Privacy & Security → Open Anyway**
+after the first launch. Windows builds are not Authenticode-signed, so SmartScreen may also show a
+warning.
 
 ## Development
 

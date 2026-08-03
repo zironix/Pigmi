@@ -7,12 +7,17 @@ function maker(name) {
 }
 
 describe('Electron Forge configuration', () => {
-  it('re-signs the final macOS bundle after changing Electron metadata', () => {
-    expect(forgeConfig.packagerConfig.osxSign).toEqual({
+  it('ad-hoc signs every macOS component without Hardened Runtime', () => {
+    const signing = forgeConfig.packagerConfig.osxSign;
+
+    expect(signing).toMatchObject({
       identity: '-',
       identityValidation: false,
       preAutoEntitlements: false,
       timestamp: 'none',
+    });
+    expect(signing.optionsForFile('/Applications/Pigmi.app')).toEqual({
+      hardenedRuntime: false,
     });
   });
 

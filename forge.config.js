@@ -2,6 +2,12 @@ const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 const path = require('path');
 
+function unsignedMacOsComponentOptions() {
+  // Ad-hoc signatures have no stable Team ID. Hardened Runtime would reject
+  // Electron Framework during App Translocation as a foreign library.
+  return { hardenedRuntime: false };
+}
+
 module.exports = {
   packagerConfig: {
     asar: true,
@@ -17,6 +23,7 @@ module.exports = {
     osxSign: {
       identity: '-',
       identityValidation: false,
+      optionsForFile: unsignedMacOsComponentOptions,
       preAutoEntitlements: false,
       timestamp: 'none',
     },
