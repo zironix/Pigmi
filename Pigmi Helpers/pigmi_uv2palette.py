@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Pigmi: UV to Palette",
     "author": "Oleg Pavlov",
-    "version": (1, 6, 4),
+    "version": (1, 6, 5),
     "blender": (5, 0, 0),
     "location": (
         "UV Editor > Sidebar > Snap UV or via hotkeys "
@@ -510,16 +510,11 @@ class UV_PT_snap_to_grid_panel(bpy.types.Panel):
     bl_category = "Snap UV"
     bl_label = "Pigmi: UV to Palette"
 
-    @classmethod
-    def poll(cls, context):
-        return (
-            is_uv_editor_area(context.area)
-            and UV_OT_snap_to_grid.poll(context)
-        )
-
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        if not UV_OT_snap_to_grid.poll(context):
+            layout.label(text="Select a mesh and enter Edit Mode", icon='INFO')
         layout.prop(scene, "snap_uv_texture_width")
         layout.prop(scene, "snap_uv_texture_height")
         layout.prop(scene, "snap_uv_cell_width")
