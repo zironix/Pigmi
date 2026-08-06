@@ -451,13 +451,13 @@ native GitHub-hosted runners and attaches them to a GitHub Release. It produces:
 To publish a version:
 
 1. Update `version` in both `package.json` and `package-lock.json`. Running
-   `npm version 2.0.2 --no-git-tag-version` updates both files together.
+   `npm version patch --no-git-tag-version` updates both files together.
 2. Commit and push the version change to `main`.
 3. Open **Actions → Release** on GitHub, select **Run workflow**, choose `main`, and confirm.
 4. Wait for all four platform builds. When they succeed, the workflow creates the matching tag,
    generates release notes, and publishes the binaries under **Releases**.
 
-For a tag-driven release, push a tag that exactly matches the package version, such as `v2.0.2`.
+For a tag-driven release, push a tag that exactly matches the package version (`vX.Y.Z`).
 The same workflow starts automatically. A mismatched tag fails before any packages are published.
 
 macOS bundles are ad-hoc signed and verified before upload. CI also ensures that Hardened Runtime

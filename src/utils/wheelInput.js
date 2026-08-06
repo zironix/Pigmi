@@ -31,6 +31,7 @@ export function classifyWheelInput({
   deltaMode = 0,
   deltaX = 0,
   deltaY = 0,
+  wheelDeltaY = 0,
   ctrlKey = false,
   metaKey = false,
 }) {
@@ -41,6 +42,13 @@ export function classifyWheelInput({
 
   const horizontalDelta = Math.abs(Number(deltaX) || 0);
   const verticalDelta = Math.abs(Number(deltaY) || 0);
+  const legacyVerticalDelta = Math.abs(Number(wheelDeltaY) || 0);
+
+  // Chromium keeps the legacy ±120 step for a conventional notched wheel even
+  // when deltaY is reported as a small pixel value. This distinguishes a mouse
+  // from a vertical two-finger gesture without sacrificing trackpad panning.
+  if (horizontalDelta === 0 && legacyVerticalDelta >= 120) return 'zoom';
+
   const largestDelta = Math.max(horizontalDelta, verticalDelta);
   const hasSubpixelDelta = !Number.isInteger(Number(deltaX)) || !Number.isInteger(Number(deltaY));
   const looksLikePreciseScrolling =

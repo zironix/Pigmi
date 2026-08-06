@@ -12,6 +12,14 @@ describe('wheel input classification', () => {
 
   it('keeps a conventional mouse wheel as zoom', () => {
     expect(classifyWheelInput({ platform: 'darwin', deltaMode: 0, deltaY: 100 })).toBe('zoom');
+    expect(
+      classifyWheelInput({
+        platform: 'darwin',
+        deltaMode: 0,
+        deltaY: 4,
+        wheelDeltaY: -120,
+      }),
+    ).toBe('zoom');
     expect(classifyWheelInput({ platform: 'darwin', deltaMode: 1, deltaY: 3 })).toBe('zoom');
     expect(classifyWheelInput({ platform: 'win32', deltaMode: 0, deltaY: 4 })).toBe('zoom');
   });

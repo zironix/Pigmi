@@ -378,6 +378,7 @@ export const canvasInteractionMethods = {
       deltaMode: event.deltaMode,
       deltaX: event.deltaX,
       deltaY: event.deltaY,
+      wheelDeltaY: event.wheelDeltaY,
       ctrlKey: event.ctrlKey,
       metaKey: event.metaKey,
     });
