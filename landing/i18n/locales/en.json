@@ -1,0 +1,159 @@
+{
+  "meta": {
+    "title": "Pigmi — Texture Palette Editor",
+    "description": "Pigmi is a cross-platform editor for texture palettes, gradient atlases and PBR material maps, with ordered layers, Blender helpers and optional MCP automation.",
+    "keywords": "Pigmi, texture palette, palette editor, gradient atlas, PBR material maps, Blender addons, MCP, game development, 3D texturing"
+  },
+  "header": {
+    "home": "Home",
+    "about": "About",
+    "features": "Features",
+    "usage": "Usage",
+    "downloads": "Downloads",
+    "language": "Language"
+  },
+  "hero": {
+    "tagline": "palette drawing software",
+    "download": "Download v2.0.3"
+  },
+  "about": {
+    "heading": "ONE MATERIAL",
+    "subtitle": "For everything you want",
+    "title": "About",
+    "p1": "PIGMI (formerly known as PalettePainter) is designed to simplify the creation and editing of texture palettes.",
+    "p2": "Texture palettes are often used for low-poly models: they let you texture every model in a game with one small texture, such as 64 × 64 pixels.",
+    "p3": "Feel free to use Metallic, Roughness, Clearcoat, Clearcoat Roughness and Emission in your materials.",
+    "p4": "Set different values for each color cell and texture all your models with a single material.",
+    "jump": "JUMP TO DOWNLOAD"
+  },
+  "features": {
+    "heading": "FEATURES",
+    "subtitle": "You will like it!",
+    "easyTitle": "Easy to use",
+    "easyDesc": "Manage and search all your palette items. Adjust sizes, colors, gradient types and much more.",
+    "gameTitle": "Game ready",
+    "gameDesc": "Pigmi exports PNG, WEBP and packed textures for games and realtime projects.",
+    "pbrTitle": "PBR Workflow",
+    "pbrDesc": "Use Metallic, Roughness, Clearcoat, Clearcoat Roughness and Emission.",
+    "syncTitle": "Realtime sync",
+    "syncDesc": "See changes instantly. Project JSON and enabled texture maps update automatically."
+  },
+  "usage": {
+    "heading": "USAGE AND CONTROLS",
+    "subtitle": "All under control!",
+    "gettingStarted": {
+      "title": "Getting started",
+      "i1": "Run Pigmi",
+      "i2": "Set the texture size, snapping step, zoom and other settings",
+      "i3": "Choose a project folder",
+      "i4": "Enter a texture name and click Create, or select an existing texture from the list",
+      "i5": "Click Load and sync to open an existing texture, or Overwrite and sync to replace the previous file"
+    },
+    "controls": {
+      "title": "Base controls",
+      "i1": "Left-click empty canvas space to create an item, or left-click an item to select it",
+      "i2": "Right-click an item to remove it immediately; right-click empty space to clear the selection",
+      "i3": "LMB + drag moves items with grid snapping",
+      "i4": "Command/Ctrl + LMB adds items to or removes them from the multi-selection",
+      "i5": "Mouse wheel zooms toward the pointer; middle-button drag pans the canvas"
+    },
+    "layers": {
+      "title": "Layers",
+      "desc": "Organize palette items in an ordered tree with nested folders, multi-selection, visibility controls, isolation, renaming and drag-and-drop reordering. Copy and paste preserves folders, colors, materials and relative positions.",
+      "k1": "Command/Ctrl + click",
+      "a1": "add or remove layers from the selection",
+      "k2": "Shift + click",
+      "a2": "select a sibling range",
+      "k3": "Alt + visibility",
+      "a3": "isolate an item or folder branch",
+      "k4": "Command/Ctrl + C, X or V",
+      "a4": "copy, cut or paste layers",
+      "k5": "Delete",
+      "a5": "remove selected layers",
+      "k6": "Enter / Escape",
+      "a6": "confirm or cancel renaming",
+      "guide": "Layer guide"
+    },
+    "mcp": {
+      "title": "MCP automation",
+      "desc": "Connect Pigmi to Codex or another compatible MCP client and edit the active document with natural-language requests. The bundled local server can inspect the layer tree, create and recolor items, move them into folders, edit PBR values, change export settings, save projects and undo changes.",
+      "i1": "Open the plug tab in Pigmi and copy the generated connection command",
+      "i2": "Run it once, restart Codex and open /mcp to confirm that Pigmi is enabled",
+      "i3": "Keep Pigmi running with the required document open while the client works",
+      "i4": "Changes are revision-checked and applied atomically to protect newer edits",
+      "guide": "MCP guide"
+    },
+    "mrc": {
+      "title": "MRC texture",
+      "desc": "An MRC texture contains four maps in separate color channels. In Blender, set Alpha to Channel Packed so the alpha channel does not distort the colors."
+    },
+    "mix": {
+      "title": "Texture mixing",
+      "p1": "Pigmi can combine an existing texture with a generated map. Put a PNG of the same resolution beside the project and name it like palette_albedo_mix.png.",
+      "p2": "Use roughness, metallic, clearcoat, clearcoat_roughness or mrc instead of albedo for the other maps."
+    }
+  },
+  "addons": {
+    "heading": "BLENDER ADDONS",
+    "subtitle": "Three focused helpers for moving palette workflows into Blender.",
+    "download": "Download .py",
+    "uv": {
+      "title": "UV to Palette",
+      "desc": "Fits selected UVs into a palette cell, preserves island proportions when needed, and maps gradients across a mesh by a drawn path, radius, distance source or cavity / fake AO.",
+      "k1": "Tab + LMB",
+      "a1": "draw a gradient path over the mesh",
+      "k2": "Tab + Shift + LMB",
+      "a2": "pick an object as the distance-gradient source",
+      "k3": "Shift + click a palette cell",
+      "a3": "apply a radial gradient",
+      "k4": "Command/Ctrl + click a palette cell",
+      "a4": "apply the cavity gradient",
+      "k5": "Enter",
+      "a5": "finish",
+      "k6": "RMB / Escape",
+      "a6": "stop painting"
+    },
+    "highlighter": {
+      "title": "Highlighter",
+      "desc": "Paints vertex colors on a mesh with an editable palette, RGBA controls, quick white, black and transparent fills, adjustable radius and falloff, plus a non-destructive preview that can be saved or restored.",
+      "k1": "No default hotkeys",
+      "a1": "all actions are available in View3D → Tool → Pigmi: Highlighter",
+      "k2": "Apply",
+      "a2": "paints the current selection",
+      "k3": "Save / Restore",
+      "a3": "commits or cancels the preview",
+      "k4": "Auto Apply",
+      "a4": "updates colors while the controls are adjusted"
+    },
+    "face": {
+      "title": "Face to Face",
+      "desc": "Saves a selected mesh part from an active face or edge, then attaches it to a target face or edge. It can duplicate the part onto several targets and keeps rotation, flip, scale and selection-restore options in Blender's Adjust Last Operation panel.",
+      "k1": "Shift + F",
+      "a1": "save the selected mesh part on the first call, then attach it on the next call",
+      "k2": "Shift + Ctrl + F",
+      "a2": "cancel the saved snapping session"
+    }
+  },
+  "downloads": {
+    "heading": "DOWNLOADS",
+    "subtitle": "Get the latest version!",
+    "main": "Main",
+    "release": "Latest release for macOS, Windows and Linux",
+    "source": "Pigmi source code",
+    "sourceDesc": "Documentation, source and release notes",
+    "addons": "Blender addons",
+    "uvDesc": "Palette-cell UV mapping and surface gradients",
+    "highlighterDesc": "Vertex-color painting, palettes and quick fills",
+    "faceDesc": "Attach selected mesh parts to target faces or edges",
+    "github": "GitHub"
+  },
+  "donations": {
+    "heading": "Donations and contacts",
+    "text": "Pigmi is completely free software. If you enjoy using it, you can support the project: donations help pay for hosting and development. You can also contact me with questions or bug reports.",
+    "channel": "TG channel",
+    "personal": "My personal TG"
+  },
+  "footer": {
+    "rights": "All rights reserved"
+  }
+}

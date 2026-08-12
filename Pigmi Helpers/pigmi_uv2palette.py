@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Pigmi: UV to Palette",
     "author": "Oleg Pavlov",
-    "version": (1, 9, 6),
+    "version": (1, 9, 11),
     "blender": (5, 0, 0),
     "location": "3D View > Sidebar > Snap UV",
     "description": (
@@ -22,6 +22,64 @@ from bpy_extras import view3d_utils
 # --- Helper functions ---
 
 path_gradient_draw_handle = None
+uv_box_draw_handle = None
+uv_box_preview_area = None
+uv_box_preview_points = None
+
+
+def draw_uv_box_selection_overlay():
+    if uv_box_preview_points is None or bpy.context.area != uv_box_preview_area:
+        return
+
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+
+    start, end = uv_box_preview_points
+    xmin, xmax = sorted((start.x, end.x))
+    ymin, ymax = sorted((start.y, end.y))
+    corners = [
+        (xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax)]
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+
+    gpu.state.blend_set('ALPHA')
+    try:
+        fill = batch_for_shader(
+            shader, 'TRIS', {"pos": corners},
+            indices=[(0, 1, 2), (0, 2, 3)])
+        shader.bind()
+        shader.uniform_float("color", (0.18, 0.48, 1.0, 0.16))
+        fill.draw(shader)
+
+        outline_vertices = [
+            corners[0], corners[1], corners[1], corners[2],
+            corners[2], corners[3], corners[3], corners[0],
+        ]
+        outline = batch_for_shader(shader, 'LINES', {"pos": outline_vertices})
+        shader.bind()
+        shader.uniform_float("color", (0.38, 0.68, 1.0, 0.95))
+        outline.draw(shader)
+    finally:
+        gpu.state.blend_set('NONE')
+
+
+def set_uv_box_preview(area, start, end):
+    global uv_box_preview_area, uv_box_preview_points
+    uv_box_preview_area = area
+    uv_box_preview_points = (start.copy(), end.copy())
+    if area is not None:
+        area.tag_redraw()
+
+
+def clear_uv_box_preview():
+    global uv_box_preview_area, uv_box_preview_points
+    area = uv_box_preview_area
+    uv_box_preview_area = None
+    uv_box_preview_points = None
+    if area is not None:
+        try:
+            area.tag_redraw()
+        except ReferenceError:
+            pass
 
 
 def draw_path_gradient_overlay():
@@ -273,6 +331,22 @@ def remove_path_gradient_overlay():
         path_gradient_draw_handle = None
 
 
+def ensure_uv_box_overlay():
+    global uv_box_draw_handle
+    if uv_box_draw_handle is None:
+        uv_box_draw_handle = bpy.types.SpaceImageEditor.draw_handler_add(
+            draw_uv_box_selection_overlay, (), 'WINDOW', 'POST_PIXEL')
+
+
+def remove_uv_box_overlay():
+    global uv_box_draw_handle
+    clear_uv_box_preview()
+    if uv_box_draw_handle is not None:
+        bpy.types.SpaceImageEditor.draw_handler_remove(
+            uv_box_draw_handle, 'WINDOW')
+        uv_box_draw_handle = None
+
+
 def redraw_view3d_areas(context):
     screen = getattr(context, "screen", None)
     if screen is None:
@@ -470,6 +544,63 @@ def window_region_under_mouse(context, event, area_types):
 def primary_modifier(event):
     """Ctrl on Windows/Linux, with Command accepted as its macOS equivalent."""
     return bool(getattr(event, "ctrl", False) or getattr(event, "oskey", False))
+
+
+def alt_modifier_active(event, held=False):
+    """Track Alt/Option even when Blender remaps Option+LMB mouse events."""
+    return bool(getattr(event, "alt", False) or held)
+
+
+def uv_cell_mouse_event(event, alt_held=False):
+    """Accept LMB and macOS-emulated Option+LMB without stealing real Alt+MMB."""
+    if event.type == 'LEFTMOUSE':
+        return True
+    return bool(
+        event.type == 'MIDDLEMOUSE' and alt_held and
+        not getattr(event, "alt", False))
+
+
+def run_uv_box_select(context, area, region, space, start, end, mode='SET'):
+    """Run Blender's native UV box selection with region-local coordinates."""
+    xmin = int(min(start.x, end.x))
+    xmax = int(max(start.x, end.x))
+    ymin = int(min(start.y, end.y))
+    ymax = int(max(start.y, end.y))
+    if xmax <= xmin or ymax <= ymin:
+        return False
+
+    override_args = {
+        "window": context.window,
+        "area": area,
+        "region": region,
+        "space_data": space,
+    }
+    try:
+        with context.temp_override(**override_args):
+            result = bpy.ops.uv.select_box(
+                'EXEC_DEFAULT', xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax,
+                wait_for_input=False, mode=mode)
+    except (RuntimeError, TypeError):
+        return False
+    return 'FINISHED' in result
+
+
+def run_uv_cell_select(context, area, region, space, cell_x, cell_y_top,
+                       grid_cell_width_uv, grid_cell_height_uv, mode='SET'):
+    """Select UVs inside one palette cell using Blender's native selector."""
+    view2d = getattr(region, "view2d", None)
+    if view2d is None:
+        return False
+    min_u = cell_x * grid_cell_width_uv
+    max_u = min_u + grid_cell_width_uv
+    min_v = 1.0 - ((cell_y_top + 1) * grid_cell_height_uv)
+    max_v = min_v + grid_cell_height_uv
+    start = view2d.view_to_region(min_u, min_v, clip=False)
+    end = view2d.view_to_region(max_u, max_v, clip=False)
+    if start is None or end is None:
+        return False
+    return run_uv_box_select(
+        context, area, region, space, Vector(start), Vector(end), mode=mode)
 
 
 def uv_to_cell_index_top(uv, grid_cell_width_uv, grid_cell_height_uv):
@@ -1107,7 +1238,9 @@ def project_loops_from_view(loops_data, obj, uv_layer, region, rv3d):
         if screen_point is not None:
             projected.append((loop, screen_point))
 
-    if len(projected) < 2:
+    # Avoid mixing freshly projected and stale UVs when a point cannot be
+    # represented in the current view.
+    if len(projected) != len(loops_data) or len(projected) < 2:
         return False
 
     min_x = min(point.x for _loop, point in projected)
@@ -1116,11 +1249,13 @@ def project_loops_from_view(loops_data, obj, uv_layer, region, rv3d):
     max_y = max(point.y for _loop, point in projected)
     width = max_x - min_x
     height = max_y - min_y
-    if width <= 1e-8 or height <= 1e-8:
+    if width <= 1e-8 and height <= 1e-8:
         return False
 
     for loop, point in projected:
-        loop[uv_layer].uv = Vector(((point.x - min_x) / width, (point.y - min_y) / height))
+        projected_u = 0.5 if width <= 1e-8 else (point.x - min_x) / width
+        projected_v = 0.5 if height <= 1e-8 else (point.y - min_y) / height
+        loop[uv_layer].uv = Vector((projected_u, projected_v))
     return True
 
 # --- Scene properties ---
@@ -1281,6 +1416,7 @@ def clear_properties():
 
 
 def reset_painting_state():
+    clear_uv_box_preview()
     try:
         scenes = list(bpy.data.scenes)
     except AttributeError:
@@ -1393,13 +1529,18 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         self.edit_bvh = None
         self.last_screen_point = None
         self.draw_modifier_held = False
-        self.swallow_uv_left_mouse = False
+        self.alt_modifier_held = False
+        self.swallow_uv_mouse_type = None
+        self.uv_mouse_press = None
+        self.uv_mouse_dragging = False
         self.drawing = False
         context.scene.snap_uv_path_points = ""
         context.scene.snap_uv_path_screen_points = ""
         context.scene.snap_uv_path_colors = ""
         context.scene.snap_uv_path_debug = ""
         ensure_path_gradient_overlay()
+        ensure_uv_box_overlay()
+        clear_uv_box_preview()
         redraw_view3d_areas(context)
         if not self.set_target_cell(
                 context,
@@ -1428,6 +1569,10 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         else:
             self.clear_current_path(context)
         context.scene.snap_uv_painting_active = False
+        self.uv_mouse_press = None
+        self.uv_mouse_dragging = False
+        self.swallow_uv_mouse_type = None
+        clear_uv_box_preview()
         self.edit_bvh = None
         self.finish_drawing()
         self.remove_stop_timer(context)
@@ -1669,7 +1814,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
 
         if not self.set_target_cell(context, target_cell_x, target_cell_y_top):
             return False
-        self.report({'INFO'}, "Tab+LMB path. Shift+click radial. Ctrl/Cmd+click cavity.")
+        self.report({'INFO'}, "Click: palette action. Shift+Ctrl/Cmd+click: select cell UVs.")
         return True
 
     def apply_drawn_gradient(self, context):
@@ -1849,14 +1994,36 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.report({'INFO'}, "Cavity gradient applied")
         return True
 
-    def apply_current_cell_action(self, context, radial=False, cavity=False):
+    def apply_current_cell_action(self, context, radial=False, cavity=False,
+                                  project_from_view=False, select_cell=False):
+        if select_cell:
+            return self.select_current_cell_uvs(context)
+        if project_from_view:
+            return self.apply_selected_to_current_cell(
+                context, project_from_view=True)
         if cavity:
             return self.apply_cavity_gradient(context)
         if radial:
             return self.apply_radial_gradient_from_center(context)
         return self.apply_selected_to_current_cell(context)
 
-    def apply_selected_to_current_cell(self, context):
+    def select_current_cell_uvs(self, context):
+        if not self.refresh_live_settings(context):
+            return False
+        if not self.target_ready:
+            return False
+        if not run_uv_cell_select(
+                context, self.uv_area, self.uv_region, self.uv_space,
+                self.target_cell_x, self.target_cell_y_top,
+                self.grid_cell_width_uv, self.grid_cell_height_uv,
+                mode='SET'):
+            self.report({'WARNING'}, "Could not select UVs in the palette cell")
+            return False
+        self.last_action_mode = 'SELECT_CELL'
+        self.report({'INFO'}, "Selected UVs in the palette cell")
+        return True
+
+    def apply_selected_to_current_cell(self, context, project_from_view=False):
         if not self.refresh_live_settings(context):
             return False
         if not self.target_ready:
@@ -1878,7 +2045,8 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             return False
         current_signature = loops_selection_signature(all_selected_loops)
         current_settings_signature = self.fit_settings_signature(context)
-        if (self.last_applied_cell_min is not None and
+        if (not project_from_view and
+                self.last_applied_cell_min is not None and
                 self.last_applied_cell_size is not None and
                 self.last_applied_selection_signature == current_signature and
                 self.last_applied_settings_signature == current_settings_signature):
@@ -1898,9 +2066,18 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                 self.last_applied_settings_signature = current_settings_signature
                 self.last_action_mode = 'FIT'
                 return True
-        if not had_uv_layer:
-            if project_loops_from_view(all_selected_loops, obj, uv_layer, self.region, self.rv3d):
-                all_selected_loops = selected_face_loop_data(bm, uv_layer, context.tool_settings)
+        if project_from_view or not had_uv_layer:
+            if not project_loops_from_view(
+                    all_selected_loops, obj, uv_layer, self.region, self.rv3d):
+                if project_from_view:
+                    self.report({'ERROR'}, "Could not project the selection from the current 3D View")
+                    return False
+            else:
+                all_selected_loops = selected_face_loop_data(
+                    bm, uv_layer, context.tool_settings)
+
+        preserve_value = (
+            False if project_from_view else context.scene.snap_uv_preserve)
 
         if context.scene.snap_uv_independent:
             islands = get_selected_uv_islands(
@@ -1915,14 +2092,14 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                     island_loops, uv_layer, self.target_min_u, self.target_min_v,
                     self.effective_cell_width_uv, self.effective_cell_height_uv,
                     self.grid_cell_width_uv, self.grid_cell_height_uv,
-                    self.margin_x_uv, self.margin_y_uv, context.scene.snap_uv_preserve)
+                    self.margin_x_uv, self.margin_y_uv, preserve_value)
                 applied = True
         else:
             fit_loops_to_cell(
                 all_selected_loops, uv_layer, self.target_min_u, self.target_min_v,
                 self.effective_cell_width_uv, self.effective_cell_height_uv,
                 self.grid_cell_width_uv, self.grid_cell_height_uv,
-                self.margin_x_uv, self.margin_y_uv, context.scene.snap_uv_preserve)
+                self.margin_x_uv, self.margin_y_uv, preserve_value)
             applied = True
 
         if not applied:
@@ -1934,7 +2111,9 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         self.last_applied_cell_size = Vector((self.effective_cell_width_uv, self.effective_cell_height_uv))
         self.last_applied_selection_signature = current_signature
         self.last_applied_settings_signature = current_settings_signature
-        self.last_action_mode = 'FIT'
+        self.last_action_mode = 'PROJECT_FROM_VIEW' if project_from_view else 'FIT'
+        if project_from_view:
+            self.report({'INFO'}, "Projected from view and moved to palette cell")
         return True
 
     def clear_current_path(self, context):
@@ -1965,10 +2144,71 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                 return {'RUNNING_MODAL'}
             return {'PASS_THROUGH'}
 
+        if event.type in {'LEFT_ALT', 'RIGHT_ALT'}:
+            self.alt_modifier_held = event.value != 'RELEASE'
+            return {'RUNNING_MODAL'}
+
         if event.type == 'WINDOW_DEACTIVATE':
             self.draw_modifier_held = False
+            self.alt_modifier_held = False
+            self.swallow_uv_mouse_type = None
+            self.uv_mouse_press = None
+            self.uv_mouse_dragging = False
+            clear_uv_box_preview()
             self.drawing = False
             self.edit_bvh = None
+            return {'RUNNING_MODAL'}
+
+        alt_active = alt_modifier_active(event, self.alt_modifier_held)
+        if (self.uv_mouse_press is not None and
+                event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}):
+            current = Vector((event.mouse_x, event.mouse_y))
+            if (current - self.uv_mouse_press["start"]).length >= 6.0:
+                self.uv_mouse_dragging = True
+                current_local = Vector((
+                    event.mouse_x - self.uv_region.x,
+                    event.mouse_y - self.uv_region.y))
+                set_uv_box_preview(
+                    self.uv_area, self.uv_mouse_press["local_start"],
+                    current_local)
+            return {'RUNNING_MODAL'}
+
+        if (self.uv_mouse_press is not None and
+                event.type == self.uv_mouse_press["mouse_type"] and
+                event.value == 'RELEASE'):
+            press = self.uv_mouse_press
+            dragged = self.uv_mouse_dragging
+            self.uv_mouse_press = None
+            self.uv_mouse_dragging = False
+            self.swallow_uv_mouse_type = None
+            clear_uv_box_preview()
+            if dragged:
+                end = Vector((
+                    event.mouse_x - self.uv_region.x,
+                    event.mouse_y - self.uv_region.y))
+                select_mode = (
+                    'SUB' if press["primary"] else
+                    'ADD' if press["shift"] else 'SET')
+                if not run_uv_box_select(
+                        context, self.uv_area, self.uv_region, self.uv_space,
+                        press["local_start"], end, mode=select_mode):
+                    self.report({'WARNING'}, "UV box selection could not be completed")
+                return {'RUNNING_MODAL'}
+
+            if self.pick_cell_from_event(context, event):
+                if len(self.screen_points) >= 2:
+                    if self.apply_drawn_gradient(context):
+                        self.clear_current_path(context)
+                        self.points = []
+                        self.screen_points = []
+                        self.last_screen_point = None
+                else:
+                    self.apply_current_cell_action(
+                        context,
+                        radial=press["shift"] and not press["primary"] and not press["alt"],
+                        cavity=press["primary"] and not press["shift"] and not press["alt"],
+                        project_from_view=press["alt"],
+                        select_cell=press["shift"] and press["primary"] and not press["alt"])
             return {'RUNNING_MODAL'}
 
         uv_region = getattr(self, "uv_region", None)
@@ -1976,25 +2216,26 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             in_saved_uv_window = (
                 uv_region.x <= event.mouse_x <= uv_region.x + uv_region.width and
                 uv_region.y <= event.mouse_y <= uv_region.y + uv_region.height)
-            if in_saved_uv_window and event.type == 'LEFTMOUSE':
+            is_cell_mouse = (
+                uv_cell_mouse_event(event, self.alt_modifier_held) or
+                event.type == self.swallow_uv_mouse_type)
+            if in_saved_uv_window and is_cell_mouse:
                 if event.value == 'PRESS':
-                    if self.pick_cell_from_event(context, event):
-                        if len(self.screen_points) >= 2:
-                            if self.apply_drawn_gradient(context):
-                                self.clear_current_path(context)
-                                self.points = []
-                                self.screen_points = []
-                                self.last_screen_point = None
-                        else:
-                            self.apply_current_cell_action(
-                                context,
-                                radial=event.shift and not primary_modifier(event),
-                                cavity=primary_modifier(event))
-                    self.swallow_uv_left_mouse = True
+                    clear_uv_box_preview()
+                    self.uv_mouse_press = {
+                        "mouse_type": event.type,
+                        "start": Vector((event.mouse_x, event.mouse_y)),
+                        "local_start": Vector((
+                            event.mouse_x - uv_region.x,
+                            event.mouse_y - uv_region.y)),
+                        "shift": bool(event.shift),
+                        "primary": primary_modifier(event),
+                        "alt": alt_active,
+                    }
+                    self.uv_mouse_dragging = False
+                    self.swallow_uv_mouse_type = event.type
                     return {'RUNNING_MODAL'}
-                if self.swallow_uv_left_mouse:
-                    if event.value == 'RELEASE':
-                        self.swallow_uv_left_mouse = False
+                if self.swallow_uv_mouse_type is not None:
                     return {'RUNNING_MODAL'}
 
         if mouse_over_ui_region(context, event):
@@ -2045,8 +2286,10 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                     else:
                         self.apply_current_cell_action(
                             context,
-                            radial=event.shift and not primary_modifier(event),
-                            cavity=primary_modifier(event))
+                            radial=event.shift and not primary_modifier(event) and not alt_active,
+                            cavity=primary_modifier(event) and not event.shift and not alt_active,
+                            project_from_view=alt_active,
+                            select_cell=event.shift and primary_modifier(event) and not alt_active)
                     return {'RUNNING_MODAL'}
                 return {'RUNNING_MODAL'}
             area, _region, _rv3d = view3d_under_mouse(context, event)
@@ -2063,8 +2306,10 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                     if self.pick_cell_from_event(context, event):
                         self.apply_current_cell_action(
                             context,
-                            radial=event.shift and not primary_modifier(event),
-                            cavity=primary_modifier(event))
+                            radial=event.shift and not primary_modifier(event) and not alt_active,
+                            cavity=primary_modifier(event) and not event.shift and not alt_active,
+                            project_from_view=alt_active,
+                            select_cell=event.shift and primary_modifier(event) and not alt_active)
                     return {'RUNNING_MODAL'}
                 return {'RUNNING_MODAL'}
             self.refresh_live_settings(context)
@@ -2161,6 +2406,7 @@ class UV_OT_stop_painting(bpy.types.Operator):
 
     def execute(self, context):
         context.scene.snap_uv_painting_active = False
+        clear_uv_box_preview()
         context.scene.snap_uv_path_points = ""
         context.scene.snap_uv_path_screen_points = ""
         context.scene.snap_uv_path_colors = ""
@@ -2184,6 +2430,7 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
     def invoke(self, context, event):
         self.override_preserve = None
         self.override_independent = None
+        self.alt_modifier_held = False
 
         # If called from UV Editor, check for UV Sync Selection.
         if context.area.type == 'IMAGE_EDITOR':
@@ -2227,11 +2474,17 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
         if self.path_gradient:
             self.report({'INFO'}, "Click a palette cell in the UV Editor image area to apply the drawn path gradient")
         else:
-            self.report({'INFO'}, "Left-click in the UV Editor to choose the target cell")
+            self.report({'INFO'}, "Click a target cell. Alt/Option+click projects from the 3D View first")
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
-        if event.type == 'LEFTMOUSE' and event.value == 'PRESS':
+        if event.type in {'LEFT_ALT', 'RIGHT_ALT'}:
+            self.alt_modifier_held = event.value != 'RELEASE'
+            return {'RUNNING_MODAL'}
+
+        alt_active = alt_modifier_active(event, self.alt_modifier_held)
+        if (uv_cell_mouse_event(event, self.alt_modifier_held) and
+                event.value == 'PRESS'):
             # Determine local coordinates of the click in the UV Editor.
             local_x = event.mouse_x - self.uv_region.x
             local_y = event.mouse_y - self.uv_region.y
@@ -2303,7 +2556,31 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
             if uv_layer is None:
                 uv_layer = bm.loops.layers.uv.verify()
 
-            if primary_modifier(event) and not self.path_gradient:
+            if (event.shift and primary_modifier(event) and
+                    not alt_active and not self.path_gradient):
+                if not run_uv_cell_select(
+                        context, self.uv_area, self.uv_region, self.uv_space,
+                        target_cell_x, target_cell_y_top,
+                        grid_cell_width_uv, grid_cell_height_uv, mode='SET'):
+                    self.report({'WARNING'}, "Could not select UVs in the palette cell")
+                    return {'CANCELLED'}
+                self.report({'INFO'}, f"Selected UVs in cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
+                return {'FINISHED'}
+
+            projected_from_view = bool(alt_active and not self.path_gradient)
+            if projected_from_view:
+                loops_data = selected_face_loop_data(
+                    bm, uv_layer, context.tool_settings)
+                if not loops_data:
+                    self.report({'ERROR'}, "No UVs selected")
+                    return {'CANCELLED'}
+                _area, view_region, rv3d = first_view3d(context)
+                if not project_loops_from_view(
+                        loops_data, obj, uv_layer, view_region, rv3d):
+                    self.report({'ERROR'}, "Could not project the selection from the current 3D View")
+                    return {'CANCELLED'}
+
+            if primary_modifier(event) and not alt_active and not self.path_gradient:
                 loops_data = selected_face_loop_data(bm, uv_layer, context.tool_settings)
                 if not loops_data:
                     self.report({'ERROR'}, "No UVs selected")
@@ -2318,7 +2595,7 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
                 self.report({'INFO'}, f"Cavity gradient mapped to cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
                 return {'FINISHED'}
 
-            if event.shift and not self.path_gradient:
+            if event.shift and not alt_active and not self.path_gradient:
                 loops_data = selected_face_loop_data(bm, uv_layer, context.tool_settings)
                 if not loops_data:
                     self.report({'ERROR'}, "No UVs selected")
@@ -2368,7 +2645,10 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
                 return {'FINISHED'}
 
             # Determine effective option values.
-            preserve_value = self.override_preserve if self.override_preserve is not None else scene.snap_uv_preserve
+            preserve_value = (
+                False if projected_from_view else
+                self.override_preserve if self.override_preserve is not None else
+                scene.snap_uv_preserve)
             independent_value = self.override_independent if self.override_independent is not None else scene.snap_uv_independent
 
             if independent_value:
@@ -2393,7 +2673,10 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
                     margin_x_uv, margin_y_uv, preserve_value)
 
             bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
-            self.report({'INFO'}, f"UVs moved to cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
+            if projected_from_view:
+                self.report({'INFO'}, f"Projected from view and moved to cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
+            else:
+                self.report({'INFO'}, f"UVs moved to cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
             return {'FINISHED'}
 
         elif event.type in {'RIGHTMOUSE', 'ESC'}:
@@ -2448,6 +2731,10 @@ class UV_PT_snap_to_grid_panel(bpy.types.Panel):
         layout.prop(scene, "snap_uv_cavity_invert")
         layout.prop(scene, "snap_uv_cavity_auto_preview")
         if scene.snap_uv_painting_active:
+            layout.label(text="Alt/Option + cell: Project from View")
+            layout.label(text="Shift + Ctrl/Cmd + cell: Select UVs")
+            layout.label(text="LMB drag in UV: Box Select")
+            layout.label(text="Shift/Ctrl + drag: Add/Subtract")
             layout.label(text="Tab + LMB: draw path")
             layout.label(text="Tab + Shift + LMB: distance source")
             layout.label(text="Shift + cell: radial")
@@ -2478,11 +2765,13 @@ def register():
     init_properties()
     bpy.app.timers.register(reset_painting_state, first_interval=0.0)
     ensure_path_gradient_overlay()
+    ensure_uv_box_overlay()
 
 
 def unregister():
     reset_painting_state()
     remove_path_gradient_overlay()
+    remove_uv_box_overlay()
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     clear_properties()
