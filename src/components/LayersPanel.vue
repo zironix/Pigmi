@@ -33,6 +33,7 @@
 import LayersItem from './LayersItem.vue';
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useLayersStore, applyLayerSelection, nextLayerId } from '../stores/layers';
+import { findLayerNodeById, resolveLayerPasteTarget } from '../utils/layerPasteTarget';
 const ls: any = useLayersStore();
 
 const props = defineProps<{
@@ -113,31 +114,12 @@ function cutSelection() {
 function pasteClipboard() {
   if (!ls.clipboard || !Array.isArray(ls.clipboard.nodes) || !ls.clipboard.nodes.length) return;
 
-  let targetInfo = null;
   const rootItems = layerTree.value.items;
-  const lastClickedId = ls.last_clicked_id;
-  if (lastClickedId !== null && lastClickedId !== undefined) {
-    const info = findNodeById(rootItems, lastClickedId);
-    if (info && info.node && info.node.type === 'folder') {
-      targetInfo = info;
-    }
-  }
-  if (!targetInfo) {
-    const selection = Array.isArray(ls.selected) ? ls.selected : [];
-    for (let i = selection.length - 1; i >= 0; i--) {
-      const info = findNodeById(rootItems, selection[i]);
-      if (info && info.node && info.node.type === 'folder') {
-        targetInfo = info;
-        break;
-      }
-    }
-  }
-  if (!targetInfo) {
-    const targetId = ls.active_id;
-    if (targetId !== null && targetId !== undefined) {
-      targetInfo = findNodeById(rootItems, targetId);
-    }
-  }
+  const targetInfo = resolveLayerPasteTarget(rootItems, {
+    selected: ls.selected,
+    lastClickedId: ls.last_clicked_id,
+    activeId: ls.active_id,
+  });
 
   let insertionArray = layerTree.value.items;
   let insertIndex = 0;
@@ -493,10 +475,10 @@ function moveItem(fromId, toId, zone) {
   const selectedSet = new Set(selection);
 
   function hasSelectedAncestor(nodeId) {
-    let info = findNodeById(root, nodeId);
+    let info = findLayerNodeById(root, nodeId);
     while (info && info.parent) {
       if (selectedSet.has(info.parent.id)) return true;
-      info = findNodeById(root, info.parent.id);
+      info = findLayerNodeById(root, info.parent.id);
     }
     return false;
   }
@@ -526,7 +508,7 @@ function moveItem(fromId, toId, zone) {
 
   // Если перемещаем только один элемент и его не нашли в выделении — добавляем вручную
   if (!isMovingSelection && !nodesToMove.some((n) => n.id === fromId)) {
-    const singleInfo = findNodeById(root, fromId);
+    const singleInfo = findLayerNodeById(root, fromId);
     if (!singleInfo) return false;
     nodesToMove.push(singleInfo.node);
   }
@@ -555,7 +537,7 @@ function moveItem(fromId, toId, zone) {
   // ===================================================================
   // 3. Находим целевой узел
   // ===================================================================
-  const targetInfo = findNodeById(root, toId);
+  const targetInfo = findLayerNodeById(root, toId);
   if (!targetInfo) return false;
 
   // Защита: нельзя перетащить элемент в самого себя или внутрь своего потомка
@@ -596,7 +578,7 @@ function moveItem(fromId, toId, zone) {
   const nodesToInsert = [];
 
   for (const node of topLevelNodes) {
-    const currentInfo = findNodeById(root, node.id);
+    const currentInfo = findLayerNodeById(root, node.id);
     if (!currentInfo) continue;
 
     // Если удаляем из того же массива, куда вставляем, и индекс удаления меньше индекса вставки
@@ -619,7 +601,7 @@ function moveItem(fromId, toId, zone) {
   // 6. Финальное место вставки (особенно важно для 'center' после удалений)
   // ===================================================================
   if (zone === 'center') {
-    const freshTarget = findNodeById(root, toId);
+    const freshTarget = findLayerNodeById(root, toId);
     if (!freshTarget) return false;
 
     if (!Array.isArray(freshTarget.node.childs)) {
@@ -655,23 +637,6 @@ function moveItem(fromId, toId, zone) {
     props.onStructureChanged('after');
   }
   return true;
-}
-
-// ===================================================================
-// Вспомогательная функция: поиск узла по ID (возвращает полный контекст)
-// ===================================================================
-function findNodeById(array, id, parent = null) {
-  for (let i = 0; i < array.length; i++) {
-    const node = array[i];
-    if (node.id === id) {
-      return { node, parentArray: array, index: i, parent };
-    }
-    if (Array.isArray(node.childs)) {
-      const result = findNodeById(node.childs, id, node);
-      if (result) return result;
-    }
-  }
-  return null;
 }
 
 function collectItemIds(node, acc) {
@@ -979,7 +944,7 @@ function generateIDs(items) {
     if (items[i].id === undefined) {
       items[i].id = nextLayerId(ls);
     }
-    const exists = !!findNodeById(layerTree.value.items, items[i].id);
+    const exists = !!findLayerNodeById(layerTree.value.items, items[i].id);
     if (!exists) {
       const newNode = {
         id: items[i].id,
@@ -997,7 +962,7 @@ function generateIDs(items) {
         ls.pending_insert.target_id !== null
       ) {
         if (ls.pending_insert.mode === 'folder') {
-          const parentInfo = findNodeById(layerTree.value.items, ls.pending_insert.target_id);
+          const parentInfo = findLayerNodeById(layerTree.value.items, ls.pending_insert.target_id);
           if (parentInfo && parentInfo.node && parentInfo.node.type === 'folder') {
             if (!Array.isArray(parentInfo.node.childs)) {
               parentInfo.node.childs = [];
@@ -1008,7 +973,7 @@ function generateIDs(items) {
             needsOrderSync = true;
           }
         } else if (ls.pending_insert.mode === 'sibling') {
-          const targetInfo = findNodeById(layerTree.value.items, ls.pending_insert.target_id);
+          const targetInfo = findLayerNodeById(layerTree.value.items, ls.pending_insert.target_id);
           if (targetInfo && targetInfo.parentArray) {
             const insertIndex = Math.max(0, targetInfo.index);
             targetInfo.parentArray.splice(insertIndex, 0, newNode);

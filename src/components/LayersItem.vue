@@ -1,7 +1,7 @@
 <template>
   <div
     class="layer-item"
-    :draggable="!isEditing"
+    :draggable="ls.renaming_id === null"
     @dragstart.stop="onDragStart"
     @dragend.stop="onDragEnd"
     @dragenter.stop.prevent="onDragEnter"
@@ -26,7 +26,13 @@
         v-if="isEditing"
         ref="editInput"
         class="layer-edit"
+        :draggable="false"
         v-model="editName"
+        @pointerdown.stop
+        @mousedown.stop
+        @click.stop
+        @dblclick.stop
+        @dragstart.stop.prevent
         @keydown.enter.prevent="commitEdit"
         @keydown.esc.prevent="cancelEdit"
         @blur="commitEdit"
@@ -81,7 +87,7 @@ import LayersItem from './LayersItem.vue';
 import { useLayersStore, applyLayerSelection } from '../stores/layers';
 import { previewCssFromItem } from '../buildTree';
 import { isPlatformPrimaryModifier } from '../utils/inputModifiers';
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 const props = defineProps<{
   item: any;
@@ -165,6 +171,10 @@ function hasItemInSubtree(node, targetId) {
 }
 
 function onDragStart($event) {
+  if (ls.renaming_id !== null) {
+    $event?.preventDefault();
+    return;
+  }
   ls.dragged_item = props.item;
   ls.is_dragging = true;
   if ($event && $event.dataTransfer) {
@@ -448,6 +458,7 @@ function toggleCollapse() {
 function onDblClick() {
   editName.value = props.item.name || '';
   isEditing.value = true;
+  ls.renaming_id = props.item.id;
   nextTick(() => {
     if (editInput.value) {
       editInput.value.focus();
@@ -460,6 +471,7 @@ function commitEdit() {
   if (!isEditing.value) return;
   const nextName = String(editName.value || '').trim();
   isEditing.value = false;
+  finishEditing();
   if (!nextName || nextName === props.item.name) return;
   props.item.name = nextName;
   if (props.item.type === 'item' && Array.isArray(props.items)) {
@@ -470,11 +482,20 @@ function commitEdit() {
 
 function cancelEdit() {
   isEditing.value = false;
+  finishEditing();
+}
+
+function finishEditing() {
+  if (ls.renaming_id === props.item.id) {
+    ls.renaming_id = null;
+  }
 }
 
 onMounted(() => {
   nextTick(() => {});
 });
+
+onBeforeUnmount(finishEditing);
 </script>
 <style scoped>
 .layer-item {
@@ -514,6 +535,8 @@ onMounted(() => {
       color: #ced0d6;
       font-family: 'JetBrains Mono', serif;
       font-size: 13px;
+      user-select: text;
+      -webkit-user-select: text;
       width: 100%;
     }
     .preview {

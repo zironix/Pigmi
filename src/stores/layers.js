@@ -19,6 +19,7 @@ export const useLayersStore = defineStore('layers', {
       last_canvas_pos: null,
       last_canvas_in_bounds: false,
       paste_offset: { x: 0, y: 0 },
+      renaming_id: null,
     };
   },
   //state: () => ({ count: 0 })
@@ -35,6 +36,9 @@ export const useLayersStore = defineStore('layers', {
         this.selected = [ids];
       }
       this.active_id = this.selected.length ? this.selected[this.selected.length - 1] : null;
+      if (!this.selected.length) {
+        this.last_clicked_id = null;
+      }
       if (activeType !== undefined) {
         this.active_type = activeType;
       } else if (!this.selected.length) {
@@ -46,6 +50,7 @@ export const useLayersStore = defineStore('layers', {
         this.active_id = null;
         this.selected = [];
         this.active_type = null;
+        this.last_clicked_id = null;
         return;
       }
       this.active_id = id;
@@ -70,6 +75,9 @@ export function applyLayerSelection(store, ids, activeType) {
     store.selected = [ids];
   }
   store.active_id = store.selected.length ? store.selected[store.selected.length - 1] : null;
+  if (!store.selected.length) {
+    store.last_clicked_id = null;
+  }
   if (activeType !== undefined) {
     store.active_type = activeType;
   } else if (!store.selected.length) {
