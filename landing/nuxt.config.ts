@@ -25,7 +25,7 @@ export default defineNuxtConfig({
     id: '98802249',
     webvisor: true
   },
-  ssr: false,
+  ssr: true,
 
   css: [
     '@/assets/styles/main.scss',
