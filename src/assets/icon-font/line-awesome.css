@@ -73,8 +73,17 @@
 .la-plus::before {
   content: '\f067';
 }
+.la-plug::before {
+  content: '\f1e6';
+}
 .la-robot::before {
   content: '\f544';
+}
+.la-save::before {
+  content: '\f0c7';
+}
+.la-search::before {
+  content: '\f002';
 }
 .la-sliders-h::before {
   content: '\f1de';

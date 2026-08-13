@@ -177,7 +177,8 @@
         </div>
         <div
           class="tab"
-          title="MCP server"
+          title="MCP / Connect Codex"
+          aria-label="MCP / Connect Codex"
           @click="handleTabClick('mcp')"
           :class="{ active: current_tab == 'mcp' && !isItemSearchSplitVisible }"
         >
