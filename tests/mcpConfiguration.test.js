@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { createCodexMcpCommand, createCodexMcpToml } from '../src/utils/mcpConfiguration';
+import {
+  createCodexMcpCommand,
+  createCodexMcpToml,
+  createMcpJsonConfiguration,
+} from '../src/utils/mcpConfiguration';
 
 describe('Codex MCP configuration', () => {
   const paths = {
@@ -31,5 +35,16 @@ describe('Codex MCP configuration', () => {
     expect(configuration).toContain('command = "node"');
     expect(configuration).toContain('"--connection-file"');
     expect(configuration).toContain('startup_timeout_sec = 20');
+  });
+
+  it('creates the common JSON configuration used by Claude Desktop and other clients', () => {
+    expect(JSON.parse(createMcpJsonConfiguration(paths))).toEqual({
+      mcpServers: {
+        pigmi: {
+          command: 'node',
+          args: [paths.serverPath, '--connection-file', paths.connectionFile],
+        },
+      },
+    });
   });
 });

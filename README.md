@@ -276,16 +276,16 @@ Pigmi does not bundle a model, AI account, or provider-specific client. Instead,
 standard stdio MCP server. Keep Pigmi running while an MCP client works: the application owns the
 active document, while the MCP process exposes focused read and edit tools to the client.
 
-### Connect Pigmi to Codex
+### Connect Pigmi to an AI client
 
-Pigmi works with Codex Desktop, Codex CLI, and the Codex IDE extension. Setup is local: Codex starts
-the MCP adapter with Node.js, and the adapter talks only to the currently running Pigmi instance on
-the same computer.
+Pigmi works with Codex Desktop/CLI, Claude Desktop, and other clients that support local STDIO MCP
+servers. Setup is local: the AI client starts Pigmi's MCP adapter with Node.js, and the adapter talks
+only to the currently running Pigmi instance on the same computer.
 
-#### What paths does Codex need?
+#### What paths does the AI client need?
 
-Codex does **not** need the path to `Pigmi.app`, `Pigmi.exe`, or the AppImage itself. It needs these
-two values:
+The client does **not** need the path to `Pigmi.app`, `Pigmi.exe`, or the AppImage itself. It needs
+these two values:
 
 1. **MCP server path** — the `mcp/server.mjs` file shipped inside Pigmi's application resources.
    This is the first argument after `node`.
@@ -294,9 +294,9 @@ two values:
 
 You do not need to find either path manually. Start Pigmi and look at the narrow vertical icon bar
 at the top of the **left sidebar**. Click its **fifth button — the plug icon directly below the
-meteor**. Hovering it shows **MCP / Connect Codex**. Copy the generated command or TOML block from
-that panel. They contain the exact paths for the current user, operating system, installation
-directory, and build.
+meteor**. Hovering it shows **MCP / Connect AI client**. Pigmi opens a full-window setup page with
+ready-to-copy configurations for Codex, Claude Desktop, and generic STDIO clients. They contain the
+exact paths for the current user, operating system, installation directory, and build.
 
 Typical locations are shown below only to explain what you will see. Do not copy them literally:
 
@@ -322,17 +322,17 @@ node --version
 
 If the terminal says that `node` is not found, install a current Node.js LTS release from
 [nodejs.org](https://nodejs.org/), completely restart Pigmi and Codex, then run the check again.
-Installing Node.js does not give Pigmi or Codex access to an online AI provider; it only runs the
-local MCP adapter.
+Installing Node.js does not give Pigmi or the AI client access to an online provider; it only runs
+the local MCP adapter.
 
-#### Method A: generated Codex CLI command (recommended)
+#### Codex method A: generated CLI command (recommended)
 
 This is the shortest and least error-prone method.
 
 1. Install and start Pigmi.
 2. Open or create a Pigmi document.
 3. In the vertical icon bar at the top of the left sidebar, click the **fifth button — the plug
-   directly below the meteor**. Its tooltip says **MCP / Connect Codex**.
+   directly below the meteor**. Its tooltip says **MCP / Connect AI client**.
 4. Confirm that the status says **Waiting**, not **Unavailable**.
 5. Find **Codex CLI command** and copy the entire command, including quotes.
 6. Open Terminal on macOS/Linux or PowerShell on Windows.
@@ -360,7 +360,7 @@ codex mcp remove pigmi
 This removes only the `pigmi` entry from Codex configuration. It does not uninstall Pigmi or delete
 any Pigmi projects.
 
-#### Method B: Codex Desktop settings, without the CLI command
+#### Codex method B: Desktop settings, without the CLI command
 
 Use this method if the `codex` command is unavailable or you prefer the graphical interface.
 
@@ -391,7 +391,7 @@ If the Codex version provides one multiline arguments box instead of separate ro
 argument on each line. Do not add shell quotes in separate argument fields unless that interface
 explicitly asks for a complete shell command.
 
-#### Method C: edit `config.toml` manually
+#### Codex method C: edit `config.toml` manually
 
 Pigmi's **Codex config.toml** box contains a complete ready-to-paste section. Copy that entire box;
 do not rewrite the paths yourself.
@@ -422,6 +422,47 @@ tool_timeout_sec = 60
 The box inside Pigmi contains actual escaped TOML strings. This matters on Windows, where path
 backslashes must be represented correctly. Copying the generated block avoids quoting mistakes.
 Save the file and restart Codex.
+
+#### Claude Desktop
+
+Pigmi's MCP page also generates the JSON configuration used by Claude Desktop.
+
+1. Start Pigmi and open its **plug** tab.
+2. In Claude Desktop, open **Settings → Developer → Edit Config**.
+3. Copy the **Claude Desktop** JSON from Pigmi.
+4. If the configuration file already contains other MCP servers, add only Pigmi's `"pigmi"`
+   entry inside the existing `"mcpServers"` object instead of replacing the whole file.
+5. Save the file, completely quit Claude Desktop, and open it again.
+6. Keep Pigmi running while Claude uses its tools.
+
+Claude Desktop normally stores the configuration here:
+
+| System  | Configuration file                                                |
+| ------- | ----------------------------------------------------------------- |
+| macOS   | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json`                     |
+
+See the [official MCP local-server guide](https://modelcontextprotocol.io/docs/develop/connect-local-servers)
+if Claude Desktop changes the location of these settings in a later release.
+
+#### Cursor, Windsurf, VS Code, and other STDIO MCP clients
+
+Open the **Any STDIO MCP client** card in Pigmi and copy its JSON, or enter the displayed fields
+manually:
+
+| Field      | Value                                    |
+| ---------- | ---------------------------------------- |
+| Name       | `pigmi`                                  |
+| Transport  | `STDIO`                                  |
+| Command    | `node`                                   |
+| Argument 1 | the displayed path to `mcp/server.mjs`   |
+| Argument 2 | `--connection-file`                      |
+| Argument 3 | the displayed `mcp-connection.json` path |
+
+The client may call its configuration section `MCP`, `Tools`, `Integrations`, or `Servers`, but it
+must support a local STDIO server. If it expects a JSON object, use the generic JSON shown by Pigmi.
+Do not paste the entire shell command into a field that asks only for the executable: the command
+field is `node`, and the remaining values are three separate arguments.
 
 #### Verify the connection
 
@@ -503,8 +544,8 @@ A successful setup exposes tools such as `pigmi_get_overview`, `pigmi_get_items`
 - `mcp-connection.json` is a temporary local credential. Do not commit it, publish it, or send its
   contents to anyone.
 - The connection file is not a Pigmi project and contains no palette or texture data.
-- Codex receives document information only through the requested MCP tools; Pigmi does not send the
-  complete texture JSON automatically.
+- The AI client receives document information only through the requested MCP tools; Pigmi does not
+  send the complete texture JSON automatically.
 - Closing Pigmi stops the bridge and removes the normal live connection.
 
 ### Other MCP clients

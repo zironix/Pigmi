@@ -1,5 +1,11 @@
 <template>
-  <div id="app-window" @keyup="addUndo" @click="addUndo('click')" @dragend="addUndo">
+  <div
+    id="app-window"
+    :class="{ 'mcp-view-active': current_tab === 'mcp' }"
+    @keyup="addUndo"
+    @click="addUndo('click')"
+    @dragend="addUndo"
+  >
     <div class="top-controls">
       <div class="logo">
         <div style="background: #f300ac"></div>
@@ -9,7 +15,7 @@
       </div>
       <div class="logo-text">
         <div>PIGMI</div>
-        <div class="version">v2.0</div>
+        <div class="version">v2.1</div>
       </div>
 
       <div class="dragger"></div>
@@ -177,8 +183,8 @@
         </div>
         <div
           class="tab"
-          title="MCP / Connect Codex"
-          aria-label="MCP / Connect Codex"
+          title="MCP / Connect AI client"
+          aria-label="MCP / Connect AI client"
           @click="handleTabClick('mcp')"
           :class="{ active: current_tab == 'mcp' && !isItemSearchSplitVisible }"
         >
@@ -657,68 +663,18 @@
         </div>
       </div>
 
-      <div
-        class="mcp-settings"
+      <McpSetupPanel
         v-if="current_tab === 'mcp' && !isItemSearchSplitVisible"
-        :class="{ locked: texture.locked_left }"
-      >
-        <div class="mcp-heading">
-          <div>
-            <div class="mcp-title">Connect Codex</div>
-            <div class="mcp-subtitle">Let Codex inspect and edit the active Pigmi document.</div>
-          </div>
-          <span
-            class="mcp-status"
-            :class="{ connected: mcp.clientCount > 0, unavailable: !mcp.running }"
-          >
-            {{
-              !mcp.running
-                ? 'Unavailable'
-                : mcp.clientCount > 0
-                  ? `${mcp.clientCount} connected`
-                  : 'Waiting'
-            }}
-          </span>
-        </div>
-
-        <p class="mcp-description">
-          Keep Pigmi open. The fastest setup is to run the command below in a terminal, then restart
-          Codex. Alternatively, open <strong>Settings → MCP servers → Add server</strong> and choose
-          <strong>STDIO</strong>.
-        </p>
-
-        <div class="custom-input">
-          <div class="name">Codex CLI command</div>
-          <textarea
-            class="mcp-config mcp-command"
-            :value="codexMcpCommand"
-            rows="5"
-            readonly
-          ></textarea>
-        </div>
-
-        <p class="mcp-description mcp-or">
-          Or paste this into <strong>~/.codex/config.toml</strong>:
-        </p>
-
-        <div class="custom-input">
-          <div class="name">Codex config.toml</div>
-          <textarea class="mcp-config" :value="codexMcpConfiguration" rows="10" readonly></textarea>
-        </div>
-
-        <p class="mcp-description mcp-note">
-          Node.js 20.19 or newer is required. The status changes after Codex calls its first Pigmi
-          tool.
-        </p>
-
-        <div class="mcp-capabilities">
-          <div><i class="las la-search"></i> Selective document reads</div>
-          <div><i class="las la-edit"></i> Atomic editing operations</div>
-          <div><i class="las la-image"></i> Canvas preview access</div>
-          <div><i class="las la-save"></i> Open and save project files</div>
-        </div>
-      </div>
+        :client-count="mcp.clientCount"
+        :codex-command="codexMcpCommand"
+        :codex-toml="codexMcpConfiguration"
+        :connection-file="mcp.connectionFile"
+        :json-configuration="mcpJsonConfiguration"
+        :running="mcp.running"
+        :server-path="mcp.serverPath"
+      />
       <div
+        v-if="current_tab !== 'mcp'"
         class="sidebar-width-resizer"
         :class="{ locked: texture.locked_left }"
         @mousedown.prevent="startSidebarResize"

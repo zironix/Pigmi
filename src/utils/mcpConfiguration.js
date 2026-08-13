@@ -40,3 +40,21 @@ export function createCodexMcpToml({ serverPath, connectionFile }) {
     'tool_timeout_sec = 60',
   ].join('\n');
 }
+
+/** Builds the common JSON shape accepted by Claude Desktop and many other MCP clients. */
+export function createMcpJsonConfiguration({ serverPath, connectionFile }) {
+  if (!serverPath || !connectionFile) return '';
+
+  return JSON.stringify(
+    {
+      mcpServers: {
+        pigmi: {
+          command: 'node',
+          args: [serverPath, '--connection-file', connectionFile],
+        },
+      },
+    },
+    null,
+    2,
+  );
+}

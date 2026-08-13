@@ -1,5 +1,6 @@
 import Colorpicker2 from '../components/Colorpicker2.vue';
 import LayersPanel from '../components/LayersPanel.vue';
+import McpSetupPanel from '../components/McpSetupPanel.vue';
 import { applyLayerSelection, useLayersStore } from '../stores/layers';
 import { canvasInteractionMethods } from './methods/canvasInteractionMethods';
 import { canvasItemMethods } from './methods/canvasItemMethods';
@@ -10,7 +11,11 @@ import { historyMethods } from './methods/historyMethods';
 import { mcpMethods } from './methods/mcpMethods';
 import { paletteMethods } from './methods/paletteMethods';
 import { uiMethods } from './methods/uiMethods';
-import { createCodexMcpCommand, createCodexMcpToml } from '../utils/mcpConfiguration';
+import {
+  createCodexMcpCommand,
+  createCodexMcpToml,
+  createMcpJsonConfiguration,
+} from '../utils/mcpConfiguration';
 import '../assets/cssfont/audiowide/stylesheet.css';
 import '../assets/icon-font/line-awesome.css';
 import '../assets/cssfont/mono/stylesheet.css';
@@ -25,6 +30,7 @@ export default {
     Colorpicker2,
     DragHandle,
     LayersPanel,
+    McpSetupPanel,
     SlickItem,
     SlickList,
     VueSelect,
@@ -196,6 +202,12 @@ export default {
     },
     codexMcpConfiguration() {
       return createCodexMcpToml({
+        connectionFile: this.mcp.connectionFile,
+        serverPath: this.mcp.serverPath,
+      });
+    },
+    mcpJsonConfiguration() {
+      return createMcpJsonConfiguration({
         connectionFile: this.mcp.connectionFile,
         serverPath: this.mcp.serverPath,
       });
