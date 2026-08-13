@@ -10,21 +10,108 @@ import { getOperationReference } from './operation-reference.mjs';
 
 const bridge = new PigmiBridgeClient();
 const server = new McpServer(
-  { name: 'pigmi', version: '1.2.0' },
+  { name: 'pigmi', version: '1.3.0' },
   { instructions: FULL_PIGMI_MCP_INSTRUCTIONS },
 );
 
 const itemRequestSchema = z.object({
   type: z.enum(['get_items', 'get_palette']).default('get_items'),
-  ids: z.array(z.number()).max(100).default([]),
+  ids: z
+    .array(z.union([z.number(), z.string()]))
+    .max(100)
+    .default([]),
+  paths: z.array(z.string()).max(100).default([]),
   query: z.string().default(''),
   folderPath: z.string().default(''),
   selected: z.boolean().default(false),
+  rect: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      width: z.number().nonnegative(),
+      height: z.number().nonnegative(),
+    })
+    .nullable()
+    .default(null),
   fields: z
     .array(z.enum(['colors', 'gradient', 'material', 'transform', 'visibility']))
     .default([]),
   limit: z.number().int().min(1).max(100).default(30),
 });
+
+const detailFieldSchema = z.enum(['colors', 'gradient', 'material', 'transform', 'visibility']);
+
+const materialSchema = z.object({
+  albedo: z.number().min(0).max(1).optional(),
+  roughness: z.number().min(0).max(100).optional(),
+  metallic: z.number().min(0).max(100).optional(),
+  emission: z.number().min(0).max(1).optional(),
+  emissionStrength: z.number().min(0).max(100).optional(),
+  clearcoat: z.number().min(0).max(100).optional(),
+  clearcoatRoughness: z.number().min(0).max(100).optional(),
+});
+
+const folderItemEditSchema = z.object({
+  relativePath: z.string().min(1),
+  newName: z.string().min(1).optional(),
+  itemType: z.enum(['g', 'sg']).optional(),
+  shape: z.enum(['l', 'r', 'c']).optional(),
+  direction: z.enum(['horizontal', 'vertical']).optional(),
+  colorMode: z.enum(['rgb', 'hsl', 'black_to_white']).optional(),
+  colors: z.array(z.string()).min(1).optional(),
+  opacity: z.number().min(0).max(100).optional(),
+  opacities: z.array(z.number().min(0).max(100)).optional(),
+  colorOffsets: z.array(z.number().min(0).max(100)).optional(),
+  size: z
+    .union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive()])])
+    .optional(),
+  sizeW: z.number().positive().optional(),
+  sizeH: z.number().positive().optional(),
+  steps: z.number().positive().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  offset: z.object({ x: z.number().optional(), y: z.number().optional() }).optional(),
+  offsetCells: z.object({ x: z.number().optional(), y: z.number().optional() }).optional(),
+  visible: z.boolean().optional(),
+  material: materialSchema.optional(),
+});
+
+const gradientItemSchema = z.object({
+  name: z.string().min(1),
+  folderPath: z.string().optional(),
+  itemType: z.enum(['g', 'sg']).optional(),
+  shape: z.enum(['l', 'r', 'c']).optional(),
+  direction: z.enum(['horizontal', 'vertical']).optional(),
+  colorMode: z.enum(['rgb', 'hsl', 'black_to_white']).optional(),
+  colors: z.array(z.string()).min(1),
+  colorOffsets: z.array(z.number().min(0).max(100)).optional(),
+  opacity: z.number().min(0).max(100).optional(),
+  opacities: z.array(z.number().min(0).max(100)).optional(),
+  size: z
+    .union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive()])])
+    .optional(),
+  sizeW: z.number().positive().optional(),
+  sizeH: z.number().positive().optional(),
+  steps: z.number().positive().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  material: materialSchema.optional(),
+});
+
+const layoutSchema = z
+  .object({
+    compactCreated: z.boolean().optional(),
+    flowDirection: z.enum(['horizontal', 'vertical']).optional(),
+    itemsPerRow: z.number().int().positive().nullable().optional(),
+    itemsPerColumn: z.number().int().positive().nullable().optional(),
+    startRow: z.number().int().positive().nullable().optional(),
+    startColumn: z.number().int().positive().nullable().optional(),
+    offsetCellsX: z.number().int().optional(),
+    offsetCellsY: z.number().int().optional(),
+    itemGapSteps: z.number().min(0).optional(),
+  })
+  .nullable()
+  .optional();
 
 function textResult(result) {
   return {
@@ -70,7 +157,7 @@ server.registerTool(
   'pigmi_get_overview',
   {
     description:
-      'Start here. Returns document settings, selection, and a compact hierarchy index without full item payloads.',
+      'Start here. Returns document settings, selection, explicit folder-child relationships, and hierarchy validation without full item payloads.',
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async () => callBridge('get_overview', {}),
@@ -80,11 +167,143 @@ server.registerTool(
   'pigmi_get_items',
   {
     description:
-      'Fetch only the fields needed for matching items, or get a compact palette inventory. Use ids from pigmi_get_overview when possible.',
+      'Fetch only the fields needed for matching items, or get a compact palette inventory. For template variants, fetch corresponding items from the relevant source folders before recoloring duplicates.',
     inputSchema: { requests: z.array(itemRequestSchema).min(1).max(4) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async ({ requests }) => callBridge('get_items', { requests }),
+);
+
+server.registerTool(
+  'pigmi_get_folders',
+  {
+    description:
+      'Fetch exact folders as complete semantic templates: nested structure, relative child paths, and requested item fields. Use this for repeated objects, variants, assemblies, or any edit that must preserve a hierarchy.',
+    inputSchema: {
+      paths: z.array(z.string().min(1)).min(1).max(8),
+      fields: z.array(detailFieldSchema).default(['colors', 'gradient', 'material']),
+    },
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  async ({ paths, fields }) => callBridge('get_folders', { paths, fields }),
+);
+
+server.registerTool(
+  'pigmi_compare_folders',
+  {
+    description:
+      'Aligns items from several folders by exact relative semantic path and reports missing roles and field differences. Use before extending a family of objects or applying consistent cross-variant edits.',
+    inputSchema: {
+      paths: z.array(z.string().min(1)).min(2).max(8),
+      fields: z.array(detailFieldSchema).default(['colors', 'gradient', 'material']),
+    },
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  async ({ paths, fields }) => callBridge('compare_folders', { paths, fields }),
+);
+
+server.registerTool(
+  'pigmi_validate_document',
+  {
+    description:
+      'Checks the active document for hierarchy/payload mismatches, duplicate ids or semantic paths, invalid gradients/material values, and items outside the canvas. Use after complex structural edits when verification is useful.',
+    annotations: { readOnlyHint: true, idempotentHint: true },
+  },
+  async () => callBridge('validate_document', {}),
+);
+
+server.registerTool(
+  'pigmi_duplicate_folder_variants',
+  {
+    description:
+      'Create complete variants from an existing folder template. Every descendant is preserved; itemEdits change generated children by exact path relative to the source folder, so generated ids are not needed.',
+    inputSchema: {
+      sourcePath: z.string().min(1),
+      variants: z
+        .array(
+          z.object({
+            newPath: z.string().min(1),
+            offset: z.object({ x: z.number().optional(), y: z.number().optional() }).optional(),
+            itemEdits: z.array(folderItemEditSchema).default([]),
+          }),
+        )
+        .min(1)
+        .max(20),
+      expectedRevision: z.string().optional(),
+      dryRun: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  async ({ sourcePath, variants, expectedRevision, dryRun }) =>
+    callBridge('apply_operations', {
+      operations: variants.map((variant) => ({
+        type: 'duplicate_folder',
+        sourcePath,
+        newPath: variant.newPath,
+        offset: variant.offset,
+        itemEdits: variant.itemEdits,
+      })),
+      expectedRevision,
+      dryRun,
+      allowPartial: false,
+    }),
+);
+
+server.registerTool(
+  'pigmi_edit_folder_items',
+  {
+    description:
+      'Edits exact semantic roles inside one or more existing folders. Each item is addressed by its path relative to that folder, avoiding generated ids and accidental matches in other subtrees.',
+    inputSchema: {
+      folders: z
+        .array(
+          z.object({
+            path: z.string().min(1),
+            itemEdits: z.array(folderItemEditSchema).min(1).max(300),
+          }),
+        )
+        .min(1)
+        .max(20),
+      expectedRevision: z.string().optional(),
+      dryRun: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  async ({ folders, expectedRevision, dryRun }) =>
+    callBridge('apply_operations', {
+      operations: folders.map((folder) => ({
+        type: 'edit_folder_items',
+        folderPath: folder.path,
+        itemEdits: folder.itemEdits,
+      })),
+      expectedRevision,
+      dryRun,
+      allowPartial: false,
+    }),
+);
+
+server.registerTool(
+  'pigmi_create_items',
+  {
+    description:
+      'Creates a typed batch of new gradient or material items, optionally in nested folders and with compact layout. Use for genuinely new palettes or structures when no existing folder should be used as a template.',
+    inputSchema: {
+      items: z.array(gradientItemSchema).min(1).max(200),
+      defaults: gradientItemSchema.partial().optional(),
+      layout: layoutSchema,
+      expectedRevision: z.string().optional(),
+      dryRun: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  async ({ items, defaults, layout, expectedRevision, dryRun }) =>
+    callBridge('apply_operations', {
+      operations: [{ type: 'create_gradient_items', defaults, items }],
+      layout,
+      expectedRevision,
+      dryRun,
+      allowPartial: false,
+    }),
 );
 
 server.registerTool(
@@ -108,20 +327,7 @@ server.registerTool(
       expectedRevision: z.string().optional(),
       dryRun: z.boolean().default(false),
       allowPartial: z.boolean().default(false),
-      layout: z
-        .object({
-          compactCreated: z.boolean().optional(),
-          flowDirection: z.enum(['horizontal', 'vertical']).optional(),
-          itemsPerRow: z.number().int().positive().nullable().optional(),
-          itemsPerColumn: z.number().int().positive().nullable().optional(),
-          startRow: z.number().int().positive().nullable().optional(),
-          startColumn: z.number().int().positive().nullable().optional(),
-          offsetCellsX: z.number().int().optional(),
-          offsetCellsY: z.number().int().optional(),
-          itemGapSteps: z.number().min(0).optional(),
-        })
-        .nullable()
-        .optional(),
+      layout: layoutSchema,
     },
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },

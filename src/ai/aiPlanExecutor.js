@@ -13,7 +13,6 @@ import {
   applyItemRename,
   applyItemUpdates,
   attachLayerItemNode,
-  collectRelativeSubfolderPaths,
   createDefaultItemTemplate,
   mergeOperationDefaults,
   resolveTargetItems,
@@ -22,7 +21,6 @@ import {
   autoArrangeCreatedItems,
   buildPerItemRecolorPalette,
   clamp,
-  collectItemFolderPaths,
   collectItemIdsFromLayerNodes,
   computeItemBounds,
   deepClone,
@@ -32,12 +30,86 @@ import {
   findFolderNodeByPath,
   findLayerNodeById,
   findNonOverlappingPosition,
+  idKey,
   normalizeGeneratedItemName,
   normalizeHexColor,
+  normalizePathLike,
   removeLayerNodesByIds,
   snap,
   toNumber,
 } from './aiPlanShared';
+
+function applyColorsPreservingMetadata(item, edit) {
+  if (!Array.isArray(edit?.colors) || !edit.colors.length) return false;
+  const previousOffsets = Array.isArray(item.color_offsets) ? item.color_offsets.slice() : [];
+  const previousOpacities = Array.isArray(item.colors)
+    ? item.colors.map((color) => clamp(toNumber(color?.rgba?.a, 1), 0, 1) * 100)
+    : [];
+  const changed = applyColorsToItem(item, edit.colors);
+  if (!changed) return false;
+
+  if (!Array.isArray(edit.colorOffsets) && previousOffsets.length === item.colors.length) {
+    item.color_offsets = previousOffsets;
+  }
+  if (
+    edit.opacity === undefined &&
+    !Array.isArray(edit.opacities) &&
+    previousOpacities.length === item.colors.length
+  ) {
+    const nextOpacities = edit.colors.map((color, index) =>
+      /^#?[0-9a-f]{8}$/i.test(String(color || '').trim()) ? null : previousOpacities[index],
+    );
+    item.colors.forEach((color, index) => {
+      const opacity = nextOpacities[index];
+      if (opacity === null) return;
+      const alpha = clamp(toNumber(opacity, 100), 0, 100) / 100;
+      if (color?.rgba) color.rgba.a = alpha;
+      if (color?.hsva) color.hsva.a = alpha;
+    });
+  }
+  return true;
+}
+
+function applyStructuredItemEdit({ item, edit, texture, layers, folderPath }) {
+  let changed = applyColorsPreservingMetadata(item, edit);
+  if (typeof edit?.newName === 'string' || typeof edit?.name === 'string') {
+    changed =
+      applyItemRename({
+        item,
+        name: typeof edit.newName === 'string' ? edit.newName : edit.name,
+        folderPath,
+        layers,
+      }) || changed;
+  }
+  changed = applyItemPosition({ item, op: edit, texture }) || changed;
+  changed = applyItemUpdates({ item, op: edit, texture }) || changed;
+  if (typeof edit?.visible === 'boolean') {
+    item.visible = edit.visible;
+    const layerNode = findLayerNodeById(layers, item.id)?.node;
+    if (layerNode?.type === 'item') layerNode.visible = edit.visible;
+    changed = true;
+  }
+  return changed;
+}
+
+function collectRelativeLayerItems(folderNode, currentFolder = '', entries = []) {
+  if (!folderNode || !Array.isArray(folderNode.childs)) return entries;
+  folderNode.childs.forEach((node) => {
+    const name = String(node?.name || '').trim();
+    if (!name) return;
+    if (node.type === 'folder') {
+      const nextFolder = currentFolder ? `${currentFolder}/${name}` : name;
+      collectRelativeLayerItems(node, nextFolder, entries);
+    } else if (node.type === 'item') {
+      entries.push({
+        node,
+        folderPath: currentFolder,
+        relativePath: currentFolder ? `${currentFolder}/${name}` : name,
+      });
+    }
+  });
+  return entries;
+}
 
 export function applyAiPlan({
   plan,
@@ -168,79 +240,199 @@ export function applyAiPlan({
         warnings.push(`op#${index + 1}: duplicate_folder source not found`);
         return;
       }
+      if (findFolderNodeByPath(layers, newPath)) {
+        warnings.push(`op#${index + 1}: duplicate_folder destination already exists`);
+        return;
+      }
 
-      ensureFolderPath({
-        layers,
-        path: newPath,
-        nextLayerId,
-      });
-
-      const relSubfolders = [];
-      collectRelativeSubfolderPaths(sourceFolder, '', relSubfolders);
-      relSubfolders.forEach((rel) => {
-        ensureFolderPath({
-          layers,
-          path: `${newPath}/${rel}`,
-          nextLayerId,
-        });
-      });
-
-      const itemFolderMap = new Map();
-      collectItemFolderPaths(layers, '', itemFolderMap);
-      const sourceItems = texture.items
-        .filter((item) => {
-          const itemPath = String(itemFolderMap.get(item.id) || '');
-          return itemPath === sourcePath || itemPath.startsWith(`${sourcePath}/`);
-        })
-        .sort((a, b) => {
-          const ay = toNumber(a.y, 0);
-          const by = toNumber(b.y, 0);
-          if (ay !== by) return ay - by;
-          return toNumber(a.x, 0) - toNumber(b.x, 0);
-        });
-
-      if (!sourceItems.length) {
+      const sourceEntries = collectRelativeLayerItems(sourceFolder);
+      if (!sourceEntries.length) {
         warnings.push(`op#${index + 1}: duplicate_folder source has no items`);
         return;
       }
+
+      const itemById = new Map(texture.items.map((item) => [idKey(item.id), item]));
+      const missingPayload = sourceEntries.find((entry) => !itemById.has(idKey(entry.node.id)));
+      if (missingPayload) {
+        warnings.push(
+          `op#${index + 1}: duplicate_folder item payload not found: ${missingPayload.relativePath}`,
+        );
+        return;
+      }
+
+      const targetFolder = ensureFolderPath({ layers, path: newPath, nextLayerId });
+      targetFolder.visible = sourceFolder.visible !== false;
+      targetFolder.collapsed = sourceFolder.collapsed === true;
+      targetFolder.childs = [];
 
       const step = toNumber(texture.step, 1) || 1;
       const width = Math.max(1, toNumber(texture.width, 2048));
       const height = Math.max(1, toNumber(texture.height, 2048));
       const offsetX = toNumber(op?.offset?.x, 0);
       const offsetY = toNumber(op?.offset?.y, step);
+      const itemEdits = Array.isArray(op.itemEdits)
+        ? op.itemEdits.filter((edit) => edit && typeof edit === 'object')
+        : [];
+      const editsByRelativePath = new Map();
+      itemEdits.forEach((edit) => {
+        const relativePath = normalizePathLike(edit.relativePath);
+        if (!relativePath) return;
+        if (editsByRelativePath.has(relativePath)) {
+          warnings.push(
+            `op#${index + 1}: duplicate_folder has duplicate itemEdits target: ${relativePath}`,
+          );
+        }
+        editsByRelativePath.set(relativePath, edit);
+      });
+      const matchedEditPaths = new Set();
 
-      sourceItems.forEach((sourceItem) => {
-        const cloned = deepClone(sourceItem);
-        cloned.id = nextLayerId();
-        cloned.selected = false;
-        const sourceItemPath = String(itemFolderMap.get(sourceItem.id) || sourcePath);
-        const relative =
-          sourceItemPath === sourcePath ? '' : sourceItemPath.slice(sourcePath.length + 1);
-        const targetItemPath = relative ? `${newPath}/${relative}` : newPath;
+      const cloneNodes = (sourceNodes, targetNodes, relativeFolder = '') => {
+        sourceNodes.forEach((sourceNode) => {
+          if (sourceNode?.type === 'folder') {
+            const name = String(sourceNode.name || '').trim();
+            const clonedFolder = {
+              ...deepClone(sourceNode),
+              id: nextLayerId(),
+              childs: [],
+            };
+            targetNodes.push(clonedFolder);
+            cloneNodes(
+              Array.isArray(sourceNode.childs) ? sourceNode.childs : [],
+              clonedFolder.childs,
+              relativeFolder ? `${relativeFolder}/${name}` : name,
+            );
+            return;
+          }
+          if (sourceNode?.type !== 'item') return;
 
-        const bounds = computeItemBounds(cloned) || { w: 1, h: 1 };
-        const maxX = Math.max(0, width - bounds.w);
-        const maxY = Math.max(0, height - bounds.h);
-        cloned.x = clamp(snap(toNumber(sourceItem.x, 0) + offsetX, step), 0, maxX);
-        cloned.y = clamp(snap(toNumber(sourceItem.y, 0) + offsetY, step), 0, maxY);
-        const freePos = findNonOverlappingPosition({
-          item: cloned,
-          desiredX: cloned.x,
-          desiredY: cloned.y,
-          texture,
-          occupiedItems: texture.items,
+          const sourceItem = itemById.get(idKey(sourceNode.id));
+          const cloned = deepClone(sourceItem);
+          cloned.id = nextLayerId();
+          cloned.selected = false;
+          const sourceBounds = computeItemBounds(cloned) || { w: 1, h: 1 };
+          cloned.x = clamp(
+            snap(toNumber(sourceItem.x, 0) + offsetX, step),
+            0,
+            Math.max(0, width - sourceBounds.w),
+          );
+          cloned.y = clamp(
+            snap(toNumber(sourceItem.y, 0) + offsetY, step),
+            0,
+            Math.max(0, height - sourceBounds.h),
+          );
+          const relativeItemPath = relativeFolder
+            ? `${relativeFolder}/${sourceNode.name}`
+            : sourceNode.name;
+          const normalizedRelativeItemPath = normalizePathLike(relativeItemPath);
+          const itemEdit = editsByRelativePath.get(normalizedRelativeItemPath);
+          if (itemEdit) {
+            matchedEditPaths.add(normalizedRelativeItemPath);
+            if (
+              !applyStructuredItemEdit({
+                item: cloned,
+                edit: itemEdit,
+                texture,
+                layers,
+                folderPath: relativeFolder ? `${newPath}/${relativeFolder}` : newPath,
+              })
+            ) {
+              warnings.push(
+                `op#${index + 1}: duplicate_folder itemEdits has no valid changes for ${relativeItemPath}`,
+              );
+            }
+          }
+
+          const bounds = computeItemBounds(cloned) || { w: 1, h: 1 };
+          const maxX = Math.max(0, width - bounds.w);
+          const maxY = Math.max(0, height - bounds.h);
+          cloned.x = clamp(snap(toNumber(cloned.x, 0), step), 0, maxX);
+          cloned.y = clamp(snap(toNumber(cloned.y, 0), step), 0, maxY);
+          const freePos = findNonOverlappingPosition({
+            item: cloned,
+            desiredX: cloned.x,
+            desiredY: cloned.y,
+            texture,
+            occupiedItems: texture.items,
+          });
+          cloned.x = freePos.x;
+          cloned.y = freePos.y;
+
+          texture.items.push(cloned);
+          targetNodes.push({
+            ...deepClone(sourceNode),
+            id: cloned.id,
+            name: cloned.name,
+            visible: cloned.visible !== false,
+            childs: [],
+          });
+          createdItemIds.push(cloned.id);
         });
-        cloned.x = freePos.x;
-        cloned.y = freePos.y;
+      };
 
-        texture.items.push(cloned);
-        attachLayerItemNode({
-          layers,
-          folderPath: targetItemPath,
-          item: cloned,
-        });
-        createdItemIds.push(cloned.id);
+      cloneNodes(sourceFolder.childs, targetFolder.childs);
+
+      editsByRelativePath.forEach((_, relativePath) => {
+        if (!matchedEditPaths.has(relativePath)) {
+          warnings.push(
+            `op#${index + 1}: duplicate_folder itemEdits target not found: ${relativePath}`,
+          );
+        }
+      });
+      return;
+    }
+
+    if (op.type === 'edit_folder_items') {
+      const folderPath = typeof op.folderPath === 'string' ? op.folderPath.trim() : '';
+      const folder = findFolderNodeByPath(layers, folderPath);
+      if (!folder) {
+        warnings.push(`op#${index + 1}: edit_folder_items folder not found`);
+        return;
+      }
+      const itemEdits = Array.isArray(op.itemEdits)
+        ? op.itemEdits.filter((edit) => edit && typeof edit === 'object')
+        : [];
+      if (!itemEdits.length) {
+        warnings.push(`op#${index + 1}: edit_folder_items has no itemEdits`);
+        return;
+      }
+
+      const entriesByPath = new Map(
+        collectRelativeLayerItems(folder).map((entry) => [
+          normalizePathLike(entry.relativePath),
+          entry,
+        ]),
+      );
+      const itemById = new Map(texture.items.map((item) => [idKey(item.id), item]));
+      const seenPaths = new Set();
+      itemEdits.forEach((edit) => {
+        const relativePath = normalizePathLike(edit.relativePath);
+        if (!relativePath || seenPaths.has(relativePath)) {
+          warnings.push(
+            `op#${index + 1}: edit_folder_items has invalid or duplicate target: ${relativePath || '(empty)'}`,
+          );
+          return;
+        }
+        seenPaths.add(relativePath);
+        const entry = entriesByPath.get(relativePath);
+        if (!entry) {
+          warnings.push(
+            `op#${index + 1}: edit_folder_items target not found: ${edit.relativePath}`,
+          );
+          return;
+        }
+        const item = itemById.get(idKey(entry.node.id));
+        if (!item) {
+          warnings.push(
+            `op#${index + 1}: edit_folder_items payload not found: ${edit.relativePath}`,
+          );
+          return;
+        }
+        const itemFolderPath = entry.folderPath ? `${folderPath}/${entry.folderPath}` : folderPath;
+        if (!applyStructuredItemEdit({ item, edit, texture, layers, folderPath: itemFolderPath })) {
+          warnings.push(
+            `op#${index + 1}: edit_folder_items has no valid changes for ${edit.relativePath}`,
+          );
+        }
       });
       return;
     }
@@ -496,7 +688,8 @@ export function applyAiPlan({
         return;
       }
       const ids = collectItemIdsFromLayerNodes([folderInfo.node]);
-      texture.items = texture.items.filter((item) => !ids.has(item.id));
+      const normalizedIds = new Set([...ids].map(idKey));
+      texture.items = texture.items.filter((item) => !normalizedIds.has(idKey(item.id)));
       folderInfo.parentArray.splice(folderInfo.index, 1);
       return;
     }

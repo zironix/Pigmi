@@ -2,6 +2,77 @@ import { describe, expect, it } from 'vitest';
 
 import { applyAiPlan } from '../src/ai/aiPlanExecutor';
 
+const color = (r, g, b, a = 1) => ({
+  rgba: { r, g, b, a },
+  hsva: { h: 0, s: 0, v: 0, a },
+});
+
+function makeHouseDocument() {
+  const roles = [
+    { id: 101, name: 'Walls', rgba: [45, 105, 180, 1], roughness: 65 },
+    { id: 102, name: 'Roof', rgba: [120, 45, 35, 1], roughness: 55 },
+    { id: 103, name: 'Glass', rgba: [80, 170, 220, 0.35], roughness: 8 },
+    { id: 104, name: 'Chimney', rgba: [45, 45, 45, 1], roughness: 70 },
+  ];
+  const items = roles.map((role, index) => ({
+    id: role.id,
+    name: role.name,
+    type: 'g',
+    shape: 'l',
+    direction: 'vertical',
+    color_mode: 'rgb',
+    colors: [
+      color(...role.rgba),
+      color(role.rgba[0] + 20, role.rgba[1] + 20, role.rgba[2] + 20, role.rgba[3]),
+    ],
+    color_offsets: [10, 90],
+    size: [32, 32],
+    x: index * 32,
+    y: 0,
+    roughness: role.roughness,
+    metallic: 0,
+    emission: 0,
+    emission_strength: 100,
+    clearcoat: 0,
+    clearcoat_roughness: 0,
+    visible: true,
+  }));
+  return {
+    texture: {
+      width: 1024,
+      height: 1024,
+      step: 32,
+      max_item_size: 200,
+      items,
+      layers: [
+        {
+          id: 1,
+          name: 'House 1',
+          type: 'folder',
+          visible: true,
+          collapsed: false,
+          childs: [
+            { id: 101, name: 'Walls', type: 'item', visible: true, childs: [] },
+            { id: 102, name: 'Roof', type: 'item', visible: true, childs: [] },
+            {
+              id: 2,
+              name: 'Details',
+              type: 'folder',
+              visible: true,
+              collapsed: false,
+              childs: [
+                { id: '103', name: 'Glass', type: 'item', visible: true, childs: [] },
+                { id: 104, name: 'Chimney', type: 'item', visible: true, childs: [] },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    layersStore: { selected: [] },
+  };
+}
+
 function makeDocument() {
   const items = [
     {
@@ -243,5 +314,113 @@ describe('AI document operations', () => {
     expect(result.warnings).toEqual([]);
     expect(result.createdItemIds).toHaveLength(16);
     expect(document.texture.items).toHaveLength(18);
+  });
+
+  it('duplicates complete folder variants and edits children by semantic relative path', () => {
+    const document = makeHouseDocument();
+    let nextId = 1000;
+    const variants = [
+      {
+        newPath: 'House 2',
+        edits: [
+          { relativePath: 'Walls', colors: ['#d6a84b', '#f0cf7a'] },
+          {
+            relativePath: 'Roof',
+            colors: ['#31485f', '#536d87'],
+            material: { metallic: 45, roughness: 28 },
+          },
+          { relativePath: 'Details/Glass', colors: ['#8ad8ef', '#d7f5ff'] },
+        ],
+      },
+      {
+        newPath: 'House 3',
+        edits: [
+          { relativePath: 'Walls', colors: ['#79945a', '#adc783'] },
+          { relativePath: 'Roof', colors: ['#56344f', '#815b75'] },
+          { relativePath: 'Details/Glass', colors: ['#7bc4dc', '#c6edf5'] },
+        ],
+      },
+      {
+        newPath: 'House 4',
+        edits: [
+          { relativePath: 'Walls', colors: ['#b8664c', '#df9675'] },
+          { relativePath: 'Roof', colors: ['#34373d', '#5a6069'] },
+          { relativePath: 'Details/Glass', colors: ['#91cde0', '#d8f2f7'] },
+        ],
+      },
+    ];
+    const result = applyAiPlan({
+      ...document,
+      nextLayerId: () => nextId++,
+      plan: {
+        operations: variants.map((variant) => ({
+          type: 'duplicate_folder',
+          sourcePath: 'House 1',
+          newPath: variant.newPath,
+          itemEdits: variant.edits,
+        })),
+      },
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.createdItemIds).toHaveLength(12);
+    expect(document.texture.items).toHaveLength(16);
+    ['House 2', 'House 3', 'House 4'].forEach((name) => {
+      const folder = document.texture.layers.find((node) => node.name === name);
+      expect(folder.childs.map((node) => node.name)).toEqual(['Walls', 'Roof', 'Details']);
+      expect(folder.childs[2].childs.map((node) => node.name)).toEqual(['Glass', 'Chimney']);
+    });
+
+    const house2 = document.texture.layers.find((node) => node.name === 'House 2');
+    const roof = document.texture.items.find((item) => item.id === house2.childs[1].id);
+    const glass = document.texture.items.find((item) => item.id === house2.childs[2].childs[0].id);
+    const chimney = document.texture.items.find(
+      (item) => item.id === house2.childs[2].childs[1].id,
+    );
+    expect(roof).toMatchObject({ metallic: 45, roughness: 28, color_offsets: [10, 90] });
+    expect(glass.colors.map((entry) => entry.rgba.a)).toEqual([0.35, 0.35]);
+    expect(glass.color_offsets).toEqual([10, 90]);
+    expect(chimney.colors.map((entry) => entry.rgba)).toEqual(
+      document.texture.items[3].colors.map((entry) => entry.rgba),
+    );
+  });
+
+  it('edits exact roles inside existing folders without touching siblings', () => {
+    const document = makeHouseDocument();
+    const result = applyAiPlan({
+      ...document,
+      nextLayerId: () => 999,
+      plan: {
+        operations: [
+          {
+            type: 'edit_folder_items',
+            folderPath: 'House 1',
+            itemEdits: [
+              {
+                relativePath: 'Roof',
+                colors: ['#8899aa', '#ccddee'],
+                material: { metallic: 80, roughness: 20, clearcoat: 35 },
+              },
+              { relativePath: 'Details/Glass', opacity: 22 },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(document.texture.items.find((item) => item.id === 102)).toMatchObject({
+      metallic: 80,
+      roughness: 20,
+      clearcoat: 35,
+    });
+    expect(
+      document.texture.items.find((item) => item.id === 103).colors.map((entry) => entry.rgba.a),
+    ).toEqual([0.22, 0.22]);
+    expect(document.texture.items.find((item) => item.id === 101).colors[0].rgba).toMatchObject({
+      r: 45,
+      g: 105,
+      b: 180,
+    });
   });
 });

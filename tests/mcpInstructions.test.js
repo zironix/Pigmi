@@ -46,7 +46,7 @@ describe('Pigmi MCP instructions', () => {
       'target.all',
       'full semantic path',
       'duplicate_folder',
-      'duplicate first and then recolor',
+      'duplicate_folder.itemEdits',
       'itemType sg',
       'radial, conic, stepped, or black-to-white',
       'maxItemSize',
@@ -59,6 +59,33 @@ describe('Pigmi MCP instructions', () => {
     ];
 
     expectedRules.forEach((rule) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(rule));
+  });
+
+  it('routes repeated structures through semantic folder tools', () => {
+    const expectedTerms = [
+      'pigmi_get_folders',
+      'pigmi_compare_folders',
+      'pigmi_duplicate_folder_variants',
+      'pigmi_edit_folder_items',
+      'exactly N complete sibling folders',
+      'complete semantic path',
+      'semantically stable material parts',
+      'PBR values as part of the semantic material',
+      'colors only',
+    ];
+    expectedTerms.forEach((term) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(term));
+
+    const reference = getOperationReference(['duplicate_folder', 'edit_folder_items']);
+    expect(reference.duplicate_folder.itemEdits[0]).toMatchObject({
+      relativePath: expect.any(String),
+      colors: expect.any(Array),
+      material: expect.any(Object),
+    });
+    expect(reference.edit_folder_items.itemEdits[0]).toMatchObject({
+      relativePath: expect.any(String),
+      material: expect.any(Object),
+      visible: expect.any(String),
+    });
   });
 
   it('describes PBR materials and per-stop opacity as actionable features', () => {

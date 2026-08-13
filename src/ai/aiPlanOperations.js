@@ -6,6 +6,8 @@ import {
   ensureFolderPath,
   findFolderNodeByPath,
   findLayerNodeById,
+  getMapValueById,
+  idKey,
   itemHexColors,
   normalizeGeneratedItemName,
   normalizePathLike,
@@ -21,9 +23,9 @@ export function resolveTargetItems(texture, selectionIds, target, layers) {
   collectItemFolderPaths(layers, '', itemFolderMap);
 
   if (!target || typeof target !== 'object') {
-    const idSet = new Set(Array.isArray(selectionIds) ? selectionIds : []);
+    const idSet = new Set((Array.isArray(selectionIds) ? selectionIds : []).map(idKey));
     if (idSet.size) {
-      return items.filter((it) => idSet.has(it.id));
+      return items.filter((it) => idSet.has(idKey(it.id)));
     }
     return [];
   }
@@ -39,14 +41,14 @@ export function resolveTargetItems(texture, selectionIds, target, layers) {
   const targetFolderPath = normalizePathLike(targetFolderPathRaw);
   if (targetFolderPath) {
     filtered = filtered.filter((it) => {
-      const itemPath = normalizePathLike(itemFolderMap.get(it.id) || '');
+      const itemPath = normalizePathLike(getMapValueById(itemFolderMap, it.id) || '');
       return itemPath === targetFolderPath || itemPath.startsWith(`${targetFolderPath}/`);
     });
   }
 
   if (Array.isArray(target.excludeIds) && target.excludeIds.length) {
-    const excludeIds = new Set(target.excludeIds);
-    filtered = filtered.filter((it) => !excludeIds.has(it.id));
+    const excludeIds = new Set(target.excludeIds.map(idKey));
+    filtered = filtered.filter((it) => !excludeIds.has(idKey(it.id)));
   }
 
   if (Array.isArray(target.excludeNameIncludes) && target.excludeNameIncludes.length) {
@@ -81,7 +83,7 @@ export function resolveTargetItems(texture, selectionIds, target, layers) {
       .filter(Boolean);
     if (includeTokens.length) {
       filtered = filtered.filter((it) => {
-        const itemPath = normalizeSearchText(itemFolderMap.get(it.id) || '');
+        const itemPath = normalizeSearchText(getMapValueById(itemFolderMap, it.id) || '');
         return includeTokens.some((token) => itemPath.includes(token));
       });
     }
@@ -93,9 +95,12 @@ export function resolveTargetItems(texture, selectionIds, target, layers) {
       const scored = filtered
         .map((it) => {
           const searchable = normalizeSearchText(
-            [it.name, itemFolderMap.get(it.id) || '', it.type, itemHexColors(it).join(' ')].join(
-              ' ',
-            ),
+            [
+              it.name,
+              getMapValueById(itemFolderMap, it.id) || '',
+              it.type,
+              itemHexColors(it).join(' '),
+            ].join(' '),
           );
           const score = queryTokens.reduce(
             (sum, token) => (searchable.includes(token) ? sum + 1 : sum),
@@ -112,18 +117,18 @@ export function resolveTargetItems(texture, selectionIds, target, layers) {
   }
 
   if (target.selected === true) {
-    const idSet = new Set(Array.isArray(selectionIds) ? selectionIds : []);
-    if (!idSet.size) return filtered;
-    filtered = filtered.filter((it) => idSet.has(it.id));
+    const idSet = new Set((Array.isArray(selectionIds) ? selectionIds : []).map(idKey));
+    if (!idSet.size) return [];
+    filtered = filtered.filter((it) => idSet.has(idKey(it.id)));
     return filtered;
   }
   if (Array.isArray(target.ids) && target.ids.length) {
-    const set = new Set(target.ids);
-    filtered = filtered.filter((it) => set.has(it.id));
+    const set = new Set(target.ids.map(idKey));
+    filtered = filtered.filter((it) => set.has(idKey(it.id)));
     return filtered;
   }
   if (target.id !== undefined && target.id !== null) {
-    const found = filtered.find((it) => it.id === target.id);
+    const found = filtered.find((it) => idKey(it.id) === idKey(target.id));
     return found ? [found] : [];
   }
   if (typeof target.name === 'string' && target.name.trim()) {
@@ -584,7 +589,7 @@ export function attachLayerItemNode({ layers, folderPath, item }) {
     id: item.id,
     name: item.name,
     type: 'item',
-    visible: true,
+    visible: item.visible !== false,
     collapsed: false,
     childs: [],
   };

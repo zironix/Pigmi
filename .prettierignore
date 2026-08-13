@@ -1,5 +1,6 @@
 .vite
 coverage
+landing
 node_modules
 out
 package-lock.json

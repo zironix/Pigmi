@@ -1,11 +1,17 @@
 import { applyAiPlan } from '../../ai/aiPlanExecutor';
 import { buildEditorOverview, fulfillEditorDataRequests } from '../../ai/editorContext';
+import {
+  buildEditorDiagnostics,
+  buildFolderSnapshots,
+  compareFolderSnapshots,
+} from '../../ai/editorInspection';
 import { applyLayerSelection } from '../../stores/layers';
 
 const MAX_OPERATIONS = 500;
 const SUPPORTED_OPERATIONS = new Set([
   'create_folder',
   'duplicate_folder',
+  'edit_folder_items',
   'rename_folder',
   'delete_folder',
   'create_gradient_item',
@@ -218,6 +224,29 @@ export const mcpMethods = {
             selectionIds: this.getMcpSelectionIds(),
             requests: params?.requests,
           }),
+        };
+      case 'get_folders':
+        return {
+          revision: documentRevision(this.texture),
+          ...buildFolderSnapshots({
+            texture: this.texture,
+            paths: params?.paths,
+            fields: params?.fields,
+          }),
+        };
+      case 'compare_folders':
+        return {
+          revision: documentRevision(this.texture),
+          ...compareFolderSnapshots({
+            texture: this.texture,
+            paths: params?.paths,
+            fields: params?.fields,
+          }),
+        };
+      case 'validate_document':
+        return {
+          revision: documentRevision(this.texture),
+          ...buildEditorDiagnostics({ texture: this.texture }),
         };
       case 'apply_operations':
         return this.applyMcpOperations(params);

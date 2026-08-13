@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildEditorOverview, fulfillEditorDataRequests } from '../src/ai/editorContext';
+import {
+  buildEditorDiagnostics,
+  buildFolderSnapshots,
+  compareFolderSnapshots,
+} from '../src/ai/editorInspection';
 
 const color = (r, g, b, a = 1) => ({ rgba: { r, g, b, a } });
 
@@ -67,40 +72,209 @@ describe('selective editor context', () => {
       lastItem: null,
     });
 
+    expect(overview.protocol).toBe('pigmi-editor-tools/3');
     expect(overview.selection).toEqual({ activeId: 102, ids: [102] });
     expect(overview.hierarchy.folders).toEqual([
       {
         id: 1,
+        name: 'Vehicle',
         path: 'Vehicle',
         parentPath: '',
+        parentId: null,
         index: 0,
         type: 'folder',
         visible: true,
         collapsed: false,
         itemCount: 2,
+        children: [
+          { id: 101, name: 'Body', path: 'Vehicle/Body', type: 'item' },
+          { id: 102, name: 'Glass', path: 'Vehicle/Glass', type: 'item' },
+        ],
       },
     ]);
     expect(overview.hierarchy.items).toEqual([
       {
         id: 101,
+        name: 'Body',
         path: 'Vehicle/Body',
         parentPath: 'Vehicle',
+        parentId: 1,
         index: 0,
         type: 'g',
         visible: true,
       },
       {
         id: 102,
+        name: 'Glass',
         path: 'Vehicle/Glass',
         parentPath: 'Vehicle',
+        parentId: 1,
         index: 1,
         type: 'g',
         visible: true,
       },
     ]);
+    expect(overview.hierarchy).toMatchObject({ rootIds: [1], valid: true, issues: [] });
     expect(overview.hierarchy.items[0]).not.toHaveProperty('colors');
     expect(overview.hierarchy.items[0]).not.toHaveProperty('material');
     expect(overview.hierarchy.items[0]).not.toHaveProperty('transform');
+  });
+
+  it('matches numeric item payloads to string layer ids without losing hierarchy', () => {
+    const texture = makeTexture();
+    texture.layers[0].id = '1';
+    texture.layers[0].childs[0].id = '101';
+    texture.layers[0].childs[1].id = '102';
+
+    const overview = buildEditorOverview({
+      texture,
+      selectionIds: [],
+      activeId: null,
+      lastItem: null,
+    });
+    const context = fulfillEditorDataRequests({
+      texture,
+      selectionIds: [],
+      requests: [{ type: 'get_items', folderPath: 'Vehicle', fields: ['colors'], limit: 10 }],
+    });
+
+    expect(overview.hierarchy.valid).toBe(true);
+    expect(overview.hierarchy.items.map((item) => item.parentPath)).toEqual(['Vehicle', 'Vehicle']);
+    expect(context.results[0].items.map((item) => item.path)).toEqual([
+      'Vehicle/Body',
+      'Vehicle/Glass',
+    ]);
+  });
+
+  it('returns complete nested folders as reusable semantic templates', () => {
+    const texture = makeTexture();
+    texture.layers = [
+      {
+        id: 10,
+        name: 'Garage',
+        type: 'folder',
+        childs: [
+          {
+            id: 1,
+            name: 'Car 1',
+            type: 'folder',
+            childs: [
+              { id: '101', name: 'Body', type: 'item', childs: [] },
+              {
+                id: 11,
+                name: 'Windows',
+                type: 'folder',
+                childs: [{ id: '102', name: 'Glass', type: 'item', childs: [] }],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const result = buildFolderSnapshots({
+      texture,
+      paths: ['Garage/Car 1'],
+      fields: ['colors', 'gradient', 'material'],
+    });
+
+    expect(result.missingPaths).toEqual([]);
+    expect(result.folders[0]).toMatchObject({
+      path: 'Garage/Car 1',
+      complete: true,
+      tree: {
+        relativePath: '',
+        children: [
+          { kind: 'item', relativePath: 'Body' },
+          {
+            kind: 'folder',
+            relativePath: 'Windows',
+            children: [{ kind: 'item', relativePath: 'Windows/Glass' }],
+          },
+        ],
+      },
+    });
+    expect(result.folders[0].items.map((item) => item.relativePath)).toEqual([
+      'Body',
+      'Windows/Glass',
+    ]);
+    expect(result.folders[0].items[1]).toMatchObject({
+      colors: ['#0064c8'],
+      colorStops: [{ opacity: 35 }],
+      material: { roughness: 5 },
+    });
+  });
+
+  it('aligns repeated folders by relative semantic paths', () => {
+    const texture = makeTexture();
+    texture.items.push({
+      ...structuredClone(texture.items[0]),
+      id: 201,
+      name: 'Body',
+      colors: [color(180, 40, 30), color(220, 80, 60)],
+    });
+    texture.items.push({
+      ...structuredClone(texture.items[1]),
+      id: 202,
+      name: 'Glass',
+    });
+    texture.layers = [
+      { id: 1, name: 'Car 1', type: 'folder', childs: texture.layers[0].childs },
+      {
+        id: 2,
+        name: 'Car 2',
+        type: 'folder',
+        childs: [
+          { id: 201, name: 'Body', type: 'item', childs: [] },
+          { id: 202, name: 'Glass', type: 'item', childs: [] },
+        ],
+      },
+    ];
+
+    const comparison = compareFolderSnapshots({
+      texture,
+      paths: ['Car 1', 'Car 2'],
+      fields: ['colors', 'material'],
+    });
+
+    expect(comparison.structurallyEquivalent).toBe(true);
+    expect(comparison.roles.map((role) => role.relativePath)).toEqual(['Body', 'Glass']);
+    expect(comparison.roles.find((role) => role.relativePath === 'Body')).toMatchObject({
+      missingIn: [],
+      sameValues: false,
+      values: [{ folderPath: 'Car 1' }, { folderPath: 'Car 2' }],
+    });
+    expect(comparison.roles.find((role) => role.relativePath === 'Glass').sameValues).toBe(true);
+  });
+
+  it('detects folder-only structural differences between variants', () => {
+    const texture = makeTexture();
+    texture.layers = [
+      { id: 1, name: 'Variant 1', type: 'folder', childs: [] },
+      {
+        id: 2,
+        name: 'Variant 2',
+        type: 'folder',
+        childs: [{ id: 3, name: 'Empty details', type: 'folder', childs: [] }],
+      },
+    ];
+    texture.items = [];
+
+    const comparison = compareFolderSnapshots({
+      texture,
+      paths: ['Variant 1', 'Variant 2'],
+      fields: [],
+    });
+
+    expect(comparison.structurallyEquivalent).toBe(false);
+    expect(comparison.structure).toEqual([
+      {
+        relativePath: 'Empty details',
+        kind: 'folder',
+        presentIn: ['Variant 2'],
+        missingIn: ['Variant 1'],
+      },
+    ]);
   });
 
   it('returns only requested items and fields', () => {
@@ -137,5 +311,51 @@ describe('selective editor context', () => {
     });
 
     expect(context.results[0].items).toEqual([]);
+  });
+
+  it('finds items by exact semantic path or canvas region and scopes palette reads', () => {
+    const texture = makeTexture();
+    const context = fulfillEditorDataRequests({
+      texture,
+      selectionIds: [],
+      requests: [
+        { type: 'get_items', paths: ['Vehicle/Glass'], fields: ['transform'], limit: 10 },
+        {
+          type: 'get_items',
+          rect: { x: 0, y: 0, width: 64, height: 128 },
+          fields: [],
+          limit: 10,
+        },
+        { type: 'get_palette', folderPath: 'Vehicle', query: 'Glass', limit: 10 },
+      ],
+    });
+
+    expect(context.results[0].items.map((item) => item.path)).toEqual(['Vehicle/Glass']);
+    expect(context.results[1].items.map((item) => item.path)).toEqual(['Vehicle/Body']);
+    expect(context.results[2]).toMatchObject({
+      matchedCount: 1,
+      palette: [{ hex: '#0064c8', count: 1 }],
+    });
+  });
+
+  it('reports malformed documents without exposing their full payload', () => {
+    const texture = makeTexture();
+    texture.layers[0].childs.pop();
+    texture.items[0].x = 1000;
+    texture.items[0].color_offsets = [0];
+    texture.items[0].metallic = 140;
+
+    const diagnostics = buildEditorDiagnostics({ texture });
+
+    expect(diagnostics.valid).toBe(false);
+    expect(diagnostics.errors.map((issue) => issue.type)).toEqual(
+      expect.arrayContaining([
+        'orphan_item_payload',
+        'invalid_color_offsets',
+        'item_out_of_bounds',
+        'invalid_material_value',
+      ]),
+    );
+    expect(diagnostics.summary).toMatchObject({ itemCount: 2, errorCount: 4 });
   });
 });

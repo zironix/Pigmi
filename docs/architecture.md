@@ -60,20 +60,35 @@ The MCP server uses progressive disclosure instead of returning the serialized t
 get_overview
   -> compact settings, selection, IDs, paths, types, and visibility
 get_items
-  -> only requested colors, gradients, materials, transforms, or visibility
+  -> only requested paths, regions, colors, gradients, materials, transforms, or visibility
+get_folders / compare_folders
+  -> complete bounded subtrees and role-aligned comparisons for repeated structures
+create_items / duplicate_folder_variants / edit_folder_items
+  -> typed high-level writes for common semantic workflows
 get_operation_reference
   -> only documentation for operation types about to be used
 apply_operations
   -> validate against a cloned document, then commit atomically
+validate_document
+  -> structural and value diagnostics after complex edits
 ```
 
-An overview omits detailed item payloads. A read workflow is limited to four requests, 100 items
-per request, and 200 returned items in total. Write requests are limited to 500 operations.
+An overview omits detailed item payloads and explicitly reports hierarchy validity. A selective
+item-read workflow is limited to four requests, 100 items per request, and 200 returned items in
+total. Folder snapshots are limited to eight folders and 300 items. Write requests are limited to
+500 operations.
 
 Write operations cover item and folder creation, editing, duplication, deletion, hierarchy
 movement, visibility, explicit selection, texture settings, export settings, and palette-generator
 settings. Newly created items do not change the current selection unless the request includes
 `set_selection`.
+
+Folder snapshots expose exact relative paths and preserve the nested layer order. Folder
+comparisons align corresponding roles without guessing from leaf names. Variant duplication clones
+the complete folder tree, then applies optional child edits by relative path, so clients never need
+to predict generated IDs. The same addressing is available for editing roles across existing
+folders. A separate typed batch tool creates genuinely new palettes when no reusable template
+exists.
 
 Item material reads and writes cover albedo, roughness, metallic, emission and its strength,
 clearcoat, and clearcoat roughness. Opacity belongs to individual color stops and is exposed

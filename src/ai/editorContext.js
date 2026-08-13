@@ -1,16 +1,25 @@
 import {
   collectItemFolderPaths,
   computeItemBounds,
+  getMapValueById,
   gradientDescriptor,
+  idKey,
   itemColorStops,
   itemHexColors,
   itemMaterial,
+  normalizePathLike,
   normalizeSearchText,
   toNumber,
   tokenList,
 } from './aiPlanShared.js';
 
-const ITEM_DETAIL_FIELDS = new Set(['colors', 'gradient', 'material', 'transform', 'visibility']);
+export const ITEM_DETAIL_FIELDS = new Set([
+  'colors',
+  'gradient',
+  'material',
+  'transform',
+  'visibility',
+]);
 const MAX_OVERVIEW_ITEMS = 1200;
 const MAX_DATA_REQUESTS = 4;
 const MAX_ITEMS_PER_REQUEST = 100;
@@ -27,10 +36,22 @@ export const EDITOR_DATA_REQUEST_SCHEMA = {
         type: 'object',
         properties: {
           type: { type: 'string', enum: ['get_items', 'get_palette'] },
-          ids: { type: 'array', items: { type: 'number' } },
+          ids: { type: 'array', items: { type: ['number', 'string'] } },
+          paths: { type: 'array', items: { type: 'string' } },
           query: { type: 'string' },
           folderPath: { type: 'string' },
           selected: { type: 'boolean' },
+          rect: {
+            type: ['object', 'null'],
+            properties: {
+              x: { type: 'number' },
+              y: { type: 'number' },
+              width: { type: 'number' },
+              height: { type: 'number' },
+            },
+            required: ['x', 'y', 'width', 'height'],
+            additionalProperties: false,
+          },
           fields: {
             type: 'array',
             items: {
@@ -58,11 +79,15 @@ export const EDITOR_DATA_REQUEST_SCHEMA = {
   additionalProperties: false,
 };
 
-function buildItemPath(item, itemFolderMap) {
-  return [itemFolderMap.get(item.id), item.name]
+export function buildItemPath(item, itemFolderMap) {
+  return [folderPathForId(itemFolderMap, item.id), item.name]
     .map((value) => String(value || '').trim())
     .filter(Boolean)
     .join('/');
+}
+
+function folderPathForId(itemFolderMap, id) {
+  return getMapValueById(itemFolderMap, id) || '';
 }
 
 function compactDefaultItem(item) {
@@ -78,7 +103,7 @@ function compactDefaultItem(item) {
   };
 }
 
-function collectLayerIndex(nodes, currentPath = '', result = []) {
+function collectLayerIndex(nodes, currentPath = '', parentId = null, result = []) {
   if (!Array.isArray(nodes)) return result;
   nodes.forEach((node, index) => {
     if (!node || (node.type !== 'folder' && node.type !== 'item')) return;
@@ -87,15 +112,17 @@ function collectLayerIndex(nodes, currentPath = '', result = []) {
     const path = currentPath ? `${currentPath}/${name}` : name;
     result.push({
       id: node.id,
+      name,
       path,
       parentPath: currentPath,
+      parentId,
       index,
       type: node.type,
       visible: node.visible !== false,
       collapsed: node.collapsed === true,
     });
     if (node.type === 'folder') {
-      collectLayerIndex(node.childs, path, result);
+      collectLayerIndex(node.childs, path, node.id, result);
     }
   });
   return result;
@@ -109,14 +136,37 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
   collectItemFolderPaths(layers, '', itemFolderMap);
 
   const layerIndex = collectLayerIndex(layers);
-  const layerById = new Map(layerIndex.map((layer) => [layer.id, layer]));
   const folderIndex = layerIndex.filter((layer) => layer.type === 'folder');
+  const layerItemIndex = layerIndex.filter((layer) => layer.type === 'item');
   const folderPaths = folderIndex.map((folder) => folder.path);
+  const textureItemById = new Map(items.map((item) => [idKey(item.id), item]));
+  const layerItemIds = new Set(layerItemIndex.map((item) => idKey(item.id)));
+  const hierarchyIssues = [];
+  const seenLayerIds = new Set();
+  layerIndex.forEach((entry) => {
+    const key = idKey(entry.id);
+    if (seenLayerIds.has(key)) {
+      hierarchyIssues.push({ type: 'duplicate_layer_id', id: entry.id, path: entry.path });
+    }
+    seenLayerIds.add(key);
+  });
+  layerItemIndex.forEach((entry) => {
+    if (!textureItemById.has(idKey(entry.id))) {
+      hierarchyIssues.push({ type: 'missing_item_payload', id: entry.id, path: entry.path });
+    }
+  });
+  items.forEach((item) => {
+    if (!layerItemIds.has(idKey(item.id))) {
+      hierarchyIssues.push({
+        type: 'orphan_item_payload',
+        id: item.id,
+        path: String(item.name || '').trim(),
+      });
+    }
+  });
   const folderItemCounts = new Map();
   items.forEach((item) => {
-    const pathParts = String(itemFolderMap.get(item.id) || '')
-      .split('/')
-      .filter(Boolean);
+    const pathParts = String(folderPathForId(itemFolderMap, item.id)).split('/').filter(Boolean);
     pathParts.forEach((_, index) => {
       const path = pathParts.slice(0, index + 1).join('/');
       folderItemCounts.set(path, (folderItemCounts.get(path) || 0) + 1);
@@ -125,10 +175,45 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
   const folders = folderIndex.map((folder) => ({
     ...folder,
     itemCount: folderItemCounts.get(folder.path) || 0,
+    children: layerIndex
+      .filter((entry) => idKey(entry.parentId) === idKey(folder.id))
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        path: entry.path,
+        type: entry.type,
+      })),
+  }));
+
+  const serializedItems = layerItemIndex.slice(0, MAX_OVERVIEW_ITEMS).map((layerItem) => {
+    const item = textureItemById.get(idKey(layerItem.id));
+    return {
+      id: layerItem.id,
+      name: layerItem.name,
+      path: layerItem.path,
+      parentPath: layerItem.parentPath,
+      parentId: layerItem.parentId,
+      index: layerItem.index,
+      type: item?.type || null,
+      visible: item ? item.visible !== false : layerItem.visible,
+    };
+  });
+  const remainingSlots = Math.max(0, MAX_OVERVIEW_ITEMS - serializedItems.length);
+  const orphanItemPayloads = items.filter((item) => !layerItemIds.has(idKey(item.id)));
+  const orphanItems = orphanItemPayloads.slice(0, remainingSlots).map((item) => ({
+    id: item.id,
+    name: String(item.name || '').trim(),
+    path: String(item.name || '').trim(),
+    parentPath: '',
+    parentId: null,
+    index: null,
+    type: item.type || null,
+    visible: item.visible !== false,
+    orphaned: true,
   }));
 
   return {
-    protocol: 'pigmi-editor-tools/2',
+    protocol: 'pigmi-editor-tools/3',
     document: {
       width: toNumber(texture?.width, 0),
       height: toNumber(texture?.height, 0),
@@ -164,15 +249,11 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
     defaults: compactDefaultItem(lastItem),
     hierarchy: {
       folders,
-      items: items.slice(0, MAX_OVERVIEW_ITEMS).map((item) => ({
-        id: item.id,
-        path: buildItemPath(item, itemFolderMap),
-        parentPath: layerById.get(item.id)?.parentPath || '',
-        index: layerById.get(item.id)?.index ?? null,
-        type: item.type,
-        visible: item.visible !== false,
-      })),
-      truncated: items.length > MAX_OVERVIEW_ITEMS,
+      items: [...serializedItems, ...orphanItems],
+      rootIds: layerIndex.filter((entry) => entry.parentId === null).map((entry) => entry.id),
+      valid: hierarchyIssues.length === 0,
+      issues: hierarchyIssues,
+      truncated: layerItemIndex.length + orphanItemPayloads.length > MAX_OVERVIEW_ITEMS,
     },
     writeOperations: [
       'create_folder',
@@ -207,28 +288,72 @@ export function normalizeEditorDataRequests(input) {
     return {
       type,
       ids: Array.isArray(request?.ids) ? [...new Set(request.ids)].slice(0, 100) : [],
+      paths: Array.isArray(request?.paths)
+        ? [...new Set(request.paths.map(normalizePathLike).filter(Boolean))].slice(0, 100)
+        : [],
       query: typeof request?.query === 'string' ? request.query.trim() : '',
       folderPath: typeof request?.folderPath === 'string' ? request.folderPath.trim() : '',
       selected: request?.selected === true,
+      rect:
+        request?.rect && typeof request.rect === 'object'
+          ? {
+              x: toNumber(request.rect.x, 0),
+              y: toNumber(request.rect.y, 0),
+              width: Math.max(0, toNumber(request.rect.width, 0)),
+              height: Math.max(0, toNumber(request.rect.height, 0)),
+            }
+          : null,
       fields,
       limit: Math.max(1, Math.min(MAX_ITEMS_PER_REQUEST, toNumber(request?.limit, 30))),
     };
   });
 }
 
-function selectRequestedItems({ items, itemFolderMap, selectionIds, request }) {
-  const requestedIds = new Set(request.ids);
-  const selectedIds = new Set(selectionIds);
+function selectRequestedItems({ items, itemFolderMap, selectionIds, request, allowAll = false }) {
+  const requestedIds = new Set(request.ids.map(idKey));
+  const requestedPaths = new Set(request.paths.map(normalizePathLike));
+  const selectedIds = new Set(selectionIds.map(idKey));
   const hasSelector =
-    requestedIds.size > 0 || request.selected || request.folderPath || request.query;
-  if (!hasSelector) return [];
+    requestedIds.size > 0 ||
+    requestedPaths.size > 0 ||
+    request.selected ||
+    request.folderPath ||
+    request.query ||
+    request.rect;
+  if (!hasSelector && !allowAll) return [];
 
   let candidates = items.filter((item) => {
-    if (requestedIds.size && !requestedIds.has(item.id)) return false;
-    if (request.selected && !selectedIds.has(item.id)) return false;
+    if (requestedIds.size && !requestedIds.has(idKey(item.id))) return false;
+    if (
+      requestedPaths.size &&
+      !requestedPaths.has(normalizePathLike(buildItemPath(item, itemFolderMap)))
+    ) {
+      return false;
+    }
+    if (request.selected && !selectedIds.has(idKey(item.id))) return false;
     if (request.folderPath) {
-      const folderPath = String(itemFolderMap.get(item.id) || '');
-      if (folderPath !== request.folderPath && !folderPath.startsWith(`${request.folderPath}/`)) {
+      const folderPath = normalizePathLike(folderPathForId(itemFolderMap, item.id));
+      const requestedFolderPath = normalizePathLike(request.folderPath);
+      if (folderPath !== requestedFolderPath && !folderPath.startsWith(`${requestedFolderPath}/`)) {
+        return false;
+      }
+    }
+    if (request.rect) {
+      const bounds = computeItemBounds(item);
+      if (!bounds) return false;
+      const itemRect = {
+        x: toNumber(item.x, 0),
+        y: toNumber(item.y, 0),
+        width: bounds.w,
+        height: bounds.h,
+      };
+      const rect = request.rect;
+      if (
+        itemRect.x + itemRect.width <= rect.x ||
+        rect.x + rect.width <= itemRect.x ||
+        itemRect.y + itemRect.height <= rect.y ||
+        rect.y + rect.height <= itemRect.y
+      ) {
         return false;
       }
     }
@@ -255,11 +380,11 @@ function selectRequestedItems({ items, itemFolderMap, selectionIds, request }) {
   return candidates.slice(0, request.limit);
 }
 
-function serializeItemDetails(item, itemFolderMap, requestedFields) {
+export function serializeItemDetails(item, itemFolderMap, requestedFields) {
   const result = {
     id: item.id,
     name: item.name,
-    folderPath: itemFolderMap.get(item.id) || '',
+    folderPath: folderPathForId(itemFolderMap, item.id),
     path: buildItemPath(item, itemFolderMap),
     type: item.type,
   };
@@ -311,9 +436,17 @@ export function fulfillEditorDataRequests({ texture, selectionIds, requests: raw
   let remainingItemBudget = MAX_ITEMS_PER_WORKFLOW;
   const results = requests.map((request) => {
     if (request.type === 'get_palette') {
+      const paletteItems = selectRequestedItems({
+        items,
+        itemFolderMap,
+        selectionIds: selectedIds,
+        request,
+        allowAll: true,
+      });
       return {
         request,
-        palette: buildPaletteInventory(items, request.limit),
+        matchedCount: paletteItems.length,
+        palette: buildPaletteInventory(paletteItems, request.limit),
       };
     }
 

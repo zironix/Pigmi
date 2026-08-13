@@ -358,9 +358,13 @@ For a development checkout, the paths typically have this form:
 The MCP server can:
 
 - inspect compact document settings, hierarchy, selection, and project state;
-- request only selected item colors, gradients, transforms, visibility, or PBR materials;
+- find items by ID, semantic path, folder, query, selection, or canvas region;
+- inspect complete nested folders and compare repeated structures by relative semantic roles;
+- create typed item batches, duplicate complete folder variants, and edit exact roles without
+  generated IDs;
 - create, duplicate, move, rename, recolor, hide, or delete items and folders;
 - edit albedo, roughness, metallic, emission, clearcoat, clearcoat roughness, and opacity;
+- validate hierarchy, payload links, gradient data, material ranges, and canvas bounds;
 - update document and export settings;
 - read a canvas preview;
 - open and save project documents;
@@ -370,15 +374,24 @@ The recommended workflow is:
 
 ```text
 pigmi_get_overview
-  → pigmi_get_items (only when more detail is needed)
-  → pigmi_get_operation_reference
-  → pigmi_apply_operations
+  → pigmi_get_items (individual items, paths, or a canvas region)
+  → pigmi_get_folders / pigmi_compare_folders (complete repeated structures)
+  → pigmi_create_items / pigmi_duplicate_folder_variants / pigmi_edit_folder_items
+  → pigmi_get_operation_reference + pigmi_apply_operations (other operations)
+  → pigmi_validate_document (after complex structural edits)
 ```
 
 Writes are validated on a cloned document and committed atomically. Revision checks prevent an AI
 client from overwriting newer user changes, and dry runs can validate complex plans before they
 modify the editor. Newly created items do not change the current selection unless the client asks
 for that explicitly.
+
+The bundled MCP instructions require clients to reason from complete folder paths rather than
+isolated layer names. For variants, existing hierarchy and materials are treated as the template:
+style-bearing roles may change together, while intrinsic roles such as glass, rubber, unpainted
+hardware, or emissive parts retain their semantic character unless the request says otherwise.
+Color-only changes preserve existing PBR values; a requested change of material identity should
+update color, roughness, metallic, emission, clearcoat, and opacity coherently.
 
 The desktop app and MCP process communicate through a loopback-only bridge protected by a random
 bearer token. The discovery file is created with user-only permissions and removed when Pigmi exits

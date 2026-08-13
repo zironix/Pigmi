@@ -290,6 +290,24 @@ export function normalizePathLike(value) {
     .toLowerCase();
 }
 
+export function idKey(id) {
+  return String(id ?? '');
+}
+
+export function idsEqual(left, right) {
+  return idKey(left) === idKey(right);
+}
+
+export function getMapValueById(map, id) {
+  if (!(map instanceof Map)) return undefined;
+  if (map.has(id)) return map.get(id);
+  const stringId = idKey(id);
+  if (map.has(stringId)) return map.get(stringId);
+  const numericId = Number(id);
+  if (Number.isSafeInteger(numericId) && map.has(numericId)) return map.get(numericId);
+  return undefined;
+}
+
 export function normalizeSearchText(value) {
   return String(value || '')
     .replace(/[_/\\.-]+/g, ' ')
@@ -333,7 +351,7 @@ export function findLayerNodeById(nodes, id, parent = null) {
   for (let i = 0; i < nodes.length; i += 1) {
     const node = nodes[i];
     if (!node) continue;
-    if (node.id === id) {
+    if (idsEqual(node.id, id)) {
       return { node, parent, parentArray: nodes, index: i };
     }
     if (Array.isArray(node.childs) && node.childs.length) {
@@ -412,10 +430,11 @@ export function collectItemIdsFromLayerNodes(nodes, ids = new Set()) {
 
 export function removeLayerNodesByIds(nodes, ids) {
   if (!Array.isArray(nodes) || !ids || !ids.size) return;
+  const normalizedIds = new Set([...ids].map(idKey));
   for (let i = nodes.length - 1; i >= 0; i -= 1) {
     const node = nodes[i];
     if (!node || typeof node !== 'object') continue;
-    if (ids.has(node.id)) {
+    if (normalizedIds.has(idKey(node.id))) {
       nodes.splice(i, 1);
       continue;
     }

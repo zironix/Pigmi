@@ -5,7 +5,15 @@ import tseslint from 'typescript-eslint';
 
 export default [
   {
-    ignores: ['.vite/**', 'build/**', 'coverage/**', 'node_modules/**', 'out/**', 'src/assets/**'],
+    ignores: [
+      '.vite/**',
+      'build/**',
+      'coverage/**',
+      'landing/**',
+      'node_modules/**',
+      'out/**',
+      'src/assets/**',
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
