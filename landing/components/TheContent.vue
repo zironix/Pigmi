@@ -220,6 +220,9 @@
                 <li><strong>{{ t('addons.uv.k3') }}</strong> — {{ t('addons.uv.a3') }}</li>
                 <li><strong>{{ t('addons.uv.k4') }}</strong> — {{ t('addons.uv.a4') }}</li>
                 <li><strong>{{ t('addons.uv.k5') }}</strong> — {{ t('addons.uv.a5') }}; <strong>{{ t('addons.uv.k6') }}</strong> — {{ t('addons.uv.a6') }}</li>
+                <li><strong>{{ t('addons.uv.k7') }}</strong> — {{ t('addons.uv.a7') }}</li>
+                <li><strong>{{ t('addons.uv.k8') }}</strong> — {{ t('addons.uv.a8') }}</li>
+                <li><strong>{{ t('addons.uv.k9') }}</strong> — {{ t('addons.uv.a9') }}</li>
               </ul>
             </div>
             <div class="right">

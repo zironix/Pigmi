@@ -14,7 +14,7 @@
   },
   "hero": {
     "tagline": "palette drawing software",
-    "download": "Download v2.0.3"
+    "download": "Download v2.0.4"
   },
   "about": {
     "heading": "ONE MATERIAL",
@@ -99,7 +99,7 @@
     "download": "Download .py",
     "uv": {
       "title": "UV to Palette",
-      "desc": "Fits selected UVs into a palette cell, preserves island proportions when needed, and maps gradients across a mesh by a drawn path, radius, distance source or cavity / fake AO.",
+      "desc": "Fits selected UVs into palette cells, can project selected polygons from the current 3D View, select polygons by palette cell, and map gradients across a mesh by a drawn path, radius, distance source or cavity / fake AO.",
       "k1": "Tab + LMB",
       "a1": "draw a gradient path over the mesh",
       "k2": "Tab + Shift + LMB",
@@ -111,7 +111,13 @@
       "k5": "Enter",
       "a5": "finish",
       "k6": "RMB / Escape",
-      "a6": "stop painting"
+      "a6": "stop painting",
+      "k7": "Alt/Option + click a palette cell",
+      "a7": "run Project from View for the selected polygons and fit the result into that cell",
+      "k8": "Shift + Ctrl/Cmd + click a palette cell",
+      "a8": "select every polygon whose UVs are inside that cell",
+      "k9": "LMB + drag in the UV Editor",
+      "a9": "box-select UVs while Painting mode is active; hold Shift to add or Ctrl/Cmd to subtract"
     },
     "highlighter": {
       "title": "Highlighter",
@@ -142,7 +148,7 @@
     "source": "Pigmi source code",
     "sourceDesc": "Documentation, source and release notes",
     "addons": "Blender addons",
-    "uvDesc": "Palette-cell UV mapping and surface gradients",
+    "uvDesc": "Palette-cell UV mapping, Project from View, cell selection and surface gradients",
     "highlighterDesc": "Vertex-color painting, palettes and quick fills",
     "faceDesc": "Attach selected mesh parts to target faces or edges",
     "github": "GitHub"
