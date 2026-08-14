@@ -275,7 +275,14 @@ export const mcpMethods = {
   async receiveMcpRequest(request) {
     try {
       const result = await this.handleMcpRequest(request || {});
-      window.electronAPI.respondToMcpRequest({ requestId: request?.requestId, result });
+      // Vue keeps the active document in reactive proxies, which Electron IPC
+      // cannot clone. MCP responses are JSON by contract, so normalize them at
+      // the renderer boundary before sending them to the main process.
+      const serializableResult = deepClone(result);
+      window.electronAPI.respondToMcpRequest({
+        requestId: request?.requestId,
+        result: serializableResult,
+      });
     } catch (error) {
       window.electronAPI.respondToMcpRequest({
         requestId: request?.requestId,
