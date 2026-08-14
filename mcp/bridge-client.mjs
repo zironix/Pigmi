@@ -56,7 +56,7 @@ export class PigmiBridgeClient {
     } catch (error) {
       if (error?.code === 'ENOENT') {
         throw new Error(
-          `Pigmi is not running (connection file not found: ${this.connectionFile})`,
+          `Pigmi is not running (connection file not found: ${this.connectionFile}). Start Pigmi and retry through MCP; do not edit Pigmi project JSON files directly.`,
           { cause: error },
         );
       }
@@ -70,7 +70,9 @@ export class PigmiBridgeClient {
       !Number.isInteger(connection?.port) ||
       typeof connection?.token !== 'string'
     ) {
-      throw new Error('Pigmi MCP connection file is invalid');
+      throw new Error(
+        'Pigmi MCP connection file is invalid. Restart Pigmi and retry through MCP; do not edit Pigmi project JSON files directly.',
+      );
     }
     return connection;
   }

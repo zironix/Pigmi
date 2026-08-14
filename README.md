@@ -518,6 +518,8 @@ A successful setup exposes tools such as `pigmi_get_overview`, `pigmi_get_items`
 - Copy a fresh command from Pigmi's plug tab and compare its connection path with Codex settings.
 - Do not create an empty `mcp-connection.json` manually. Pigmi must create it because it contains
   the current port and authentication token.
+- Do not let the AI client open or modify a Pigmi project JSON file directly. Start Pigmi and retry
+  the request through MCP so hierarchy validation, atomic writes, and undo remain available.
 
 **Codex lists `pigmi`, but Pigmi remains on `Waiting`**
 

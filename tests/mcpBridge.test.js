@@ -29,6 +29,17 @@ async function createConnectionFile() {
 }
 
 describe('MCP bridge client', () => {
+  it('forbids direct JSON fallback when Pigmi is not running', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'pigmi-mcp-missing-test-'));
+    const connectionFile = path.join(directory, 'missing.json');
+    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+    const client = new PigmiBridgeClient({ connectionFile });
+
+    await expect(client.call('get_overview')).rejects.toThrow(
+      'do not edit Pigmi project JSON files directly',
+    );
+  });
+
   it('authenticates and serializes editor requests from the discovery file', async () => {
     const connectionFile = await createConnectionFile();
     const fetchImpl = vi.fn(async () => Response.json({ result: { revision: 'test-revision' } }));

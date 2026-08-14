@@ -10,7 +10,7 @@ import { getOperationReference } from './operation-reference.mjs';
 
 const bridge = new PigmiBridgeClient();
 const server = new McpServer(
-  { name: 'pigmi', version: '1.3.0' },
+  { name: 'pigmi', version: '1.3.1' },
   { instructions: FULL_PIGMI_MCP_INSTRUCTIONS },
 );
 

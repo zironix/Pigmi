@@ -9,11 +9,12 @@ import { getOperationReference } from '../mcp/operation-reference.mjs';
 
 describe('Pigmi MCP instructions', () => {
   it('keeps the critical workflow self-contained near the beginning', () => {
-    const opening = PIGMI_MCP_INSTRUCTIONS.slice(0, 512);
+    const opening = PIGMI_MCP_INSTRUCTIONS.slice(0, 1024);
 
     expect(opening).toContain('pigmi_get_overview');
     expect(opening).toContain('pigmi_get_items');
     expect(opening).toContain('expectedRevision');
+    expect(opening).toContain('never fall back to direct JSON editing');
     expect(opening).toContain('never select newly created items');
   });
 
