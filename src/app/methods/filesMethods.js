@@ -218,6 +218,10 @@ export const fileMethods = {
           }
           this.sync = true;
           this.undo_array = [];
+          // Assigning a loaded texture updates every canvas width/height in the
+          // template. Setting either attribute clears the bitmap, so drawing
+          // before Vue finishes that DOM patch leaves the visible canvas blank.
+          await this.$nextTick();
           this.draw();
           this.addUndo();
         }
