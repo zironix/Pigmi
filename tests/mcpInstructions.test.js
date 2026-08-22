@@ -33,6 +33,8 @@ describe('Pigmi MCP instructions', () => {
       'numbering style',
       'zero padding',
       'local spatial convention',
+      'separate palettes or groups',
+      'items touch edge-to-edge',
       'every offset is relative to sourcePath',
       'left-to-right, then top-to-bottom fallback',
     ];
@@ -40,6 +42,7 @@ describe('Pigmi MCP instructions', () => {
     expectedTerms.forEach((term) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(term));
     expect(PIGMI_EDIT_PROMPT).toContain('never use hardcoded domain conventions');
     expect(PIGMI_EDIT_PROMPT).toContain('bounds/transforms');
+    expect(PIGMI_EDIT_PROMPT).toContain('edge-to-edge unless the user explicitly requests spacing');
   });
 
   it('preserves complete repeated structures and exact requested counts', () => {
@@ -127,6 +130,9 @@ describe('Pigmi MCP instructions', () => {
       'straightforward new palette needs only overview then pigmi_create_items',
     );
     expect(PIGMI_SERVER_INSTRUCTIONS).toContain('never hardcode domain conventions');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain(
+      'edge-to-edge unless the user explicitly requests spacing',
+    );
     expect(PIGMI_SERVER_INSTRUCTIONS).toContain('left-to-right, then top-to-bottom');
     expect(PIGMI_SERVER_INSTRUCTIONS).toContain('avoid repeated reads');
   });

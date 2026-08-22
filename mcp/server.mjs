@@ -113,7 +113,11 @@ const layoutSchema = z
     startColumn: z.number().int().positive().nullable().optional(),
     offsetCellsX: z.number().int().optional(),
     offsetCellsY: z.number().int().optional(),
-    itemGapSteps: z.number().min(0).optional(),
+    itemGapSteps: z
+      .number()
+      .min(0)
+      .optional()
+      .describe('Internal palette gap in grid steps; omit unless the user requests spacing.'),
   })
   .nullable()
   .optional();
@@ -280,7 +284,7 @@ server.registerTool(
   'pigmi_create_items',
   {
     description:
-      'Fast path for straightforward new palettes: after one overview, create all requested items directly. Infer names and clear local geometry; otherwise use compact left-to-right then top-to-bottom. Do not fetch an operation reference, dry-run, preview, or validate unless ambiguity requires it.',
+      'Fast path for straightforward new palettes: after one overview, create all requested items directly. Infer names and clear palette-group geometry. Inside each palette, use an edge-to-edge zero-gap layout unless the user explicitly requested spacing; with no clear group placement, flow compactly left-to-right then top-to-bottom. Do not fetch an operation reference, dry-run, preview, or validate unless ambiguity requires it.',
     inputSchema: {
       items: z.array(gradientItemSchema).min(1).max(200),
       defaults: gradientItemSchema.partial().optional(),

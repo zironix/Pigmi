@@ -1,7 +1,7 @@
 // MCP clients may repeat server-wide instructions beside every tool. Keep this
 // bootstrap deliberately short; the optional edit prompt carries the detailed
 // workflow when a client explicitly requests it.
-export const PIGMI_SERVER_INSTRUCTIONS = `Pigmi edits the active visual palette document. For edits, call pigmi_get_overview once, then use the narrowest necessary read and a specialized write. A straightforward new palette needs only overview then pigmi_create_items. Infer exact naming, language/script, hierarchy, colors, and placement from the request and nearest document evidence; never hardcode domain conventions. Explicit instructions win; unclear placement falls back left-to-right, then top-to-bottom. Pass expectedRevision, avoid repeated reads, operation references, dry runs, previews, or validation unless they add necessary information, and never change selection or edit project JSON directly.`;
+export const PIGMI_SERVER_INSTRUCTIONS = `Pigmi edits the active visual palette document. For edits, call pigmi_get_overview once, then use the narrowest necessary read and a specialized write. A straightforward new palette needs only overview then pigmi_create_items. Infer exact naming, language/script, hierarchy, colors, and placement from the request and nearest document evidence; never hardcode domain conventions. Palette/atlas items touch edge-to-edge unless the user explicitly requests spacing; unclear placement flows left-to-right, then top-to-bottom. Pass expectedRevision, avoid repeated reads, operation references, dry runs, previews, or validation unless necessary, and never change selection or edit project JSON directly.`;
 
 export const PIGMI_MCP_INSTRUCTIONS = `Pigmi is a visual texture-palette editor. Make the smallest change that satisfies the user's literal request. Start every editor task with pigmi_get_overview. Never read or edit Pigmi project JSON through the filesystem, shell, or text editor; all document work goes through Pigmi MCP tools. If Pigmi is unavailable, stop and ask the user to reconnect it. Pass expectedRevision on writes, and never change selection unless requested.
 
@@ -18,7 +18,7 @@ Document-pattern behavior:
 - Requests such as “more”, “another”, “continue”, “similar”, or “additional variants” refer to the nearest relevant existing siblings unless the user says otherwise.
 - Read raw evidence before extending a pattern: overview paths and folder bounds, complete relevant folders, comparisons of repeated roles, and item transforms when standalone items are involved.
 - Follow the local naming convention exactly: preserve the user's language or script, terminology, capitalization, separators, numbering style, zero padding, and folder depth. Do not translate or replace names merely because another wording seems more familiar.
-- Follow the local spatial convention when it is clear: preserve grouping, alignment axis, order, repeated displacement, and gap. For duplicate-folder variants, every offset is relative to sourcePath, so successive variants may need successive multiples of the observed displacement.
+- Follow the local spatial convention between separate palettes or groups: grouping, axis, order, displacement, and group gap. Within one palette/atlas, items touch edge-to-edge unless the user explicitly requests spacing. For duplicate variants, every offset is relative to sourcePath; use successive multiples for a series.
 - Existing hierarchy is the template. Preserve every descendant, relative path, order, item type, gradient structure, transform relationship, material, and visibility unless the user requests a difference.
 - Compare all relevant sibling examples to distinguish stable properties from changing ones. Do not generalize from one arbitrary item or from a generic leaf name without its parent path.
 - Explicit user instructions override inferred conventions. If evidence conflicts, prefer the most local relevant examples. If no clear spatial pattern exists, use the compact left-to-right, then top-to-bottom fallback. If no safe name can be inferred, use wording supplied by the user or ask rather than inventing a language-specific “copy” label.
@@ -48,7 +48,7 @@ export const PIGMI_MATERIAL_INSTRUCTIONS = `Material/PBR rules:
 
 export const PIGMI_LAYOUT_INSTRUCTIONS = `Layout rules:
 - Explicit placement wins. Otherwise continue a clear local pattern inferred from relevant sibling bounds or item transforms.
-- With no clear pattern, use compactCreated true and horizontal flow: left-to-right, then top-to-bottom, with no artificial gaps.
+- Palette/atlas items use itemGapSteps 0 unless the user requests spacing; absent a clear group pattern, use compactCreated true and flow left-to-right, then top-to-bottom.
 - Use top-level layout instead of repeated x/y for a uniform new batch. Use explicit x/y or duplicate offsets when continuing observed geometry.
 - Rows and columns are 1-based. Set itemsPerRow/itemsPerColumn only for an intentional fixed wrap, and use offsetCells for relative grid-cell movement.`;
 
@@ -58,6 +58,6 @@ ${PIGMI_MATERIAL_INSTRUCTIONS}
 
 ${PIGMI_LAYOUT_INSTRUCTIONS}`;
 
-export const PIGMI_EDIT_PROMPT = `Use Pigmi MCP to complete the request below. Inspect the compact overview first. Infer naming, language/script, hierarchy, placement, and spacing from the nearest relevant existing examples; never use hardcoded domain conventions. For more or similar variants, inspect complete sibling templates and their bounds/transforms, preserve stable roles, and continue a clear pattern. Explicit user instructions override inference; ambiguous placement falls back to compact left-to-right, then top-to-bottom. Read only necessary details, write atomically with expectedRevision, and do not change selection implicitly.
+export const PIGMI_EDIT_PROMPT = `Use Pigmi MCP to complete the request below. Inspect the compact overview first. Infer naming, language/script, hierarchy, and group placement from nearby examples; never use hardcoded domain conventions. Within each palette/atlas, place items edge-to-edge unless the user explicitly requests spacing. For more variants, inspect complete sibling templates and bounds/transforms, preserve stable roles, and continue their group pattern. Explicit instructions override inference; ambiguous placement falls back compact left-to-right, then top-to-bottom. Read only necessary details, write atomically with expectedRevision, and do not change selection implicitly.
 
 Request:`;
