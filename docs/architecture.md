@@ -139,7 +139,8 @@ check GitHub once per application session. The main process uses Electron's netw
 eight-second timeout, and GitHub's latest published stable-release endpoint. Network failures,
 rate limits, missing releases, and malformed tags return a quiet "no result" state and never delay
 or interrupt editor startup. The renderer can request only Pigmi's fixed Releases page; it cannot
-pass arbitrary URLs to `shell.openExternal`.
+pass arbitrary URLs to `shell.openExternal`. A renderer-local application preference can disable
+the request entirely and hides the update badge without adding a project-specific texture field.
 
 ### State and saved files
 

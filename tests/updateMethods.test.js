@@ -19,6 +19,7 @@ describe('renderer update state', () => {
           updateAvailable: true,
         })),
       },
+      localStorage: { getItem: vi.fn(() => null), setItem: vi.fn() },
     };
     const state = { appVersion: '', latestVersion: '', updateAvailable: false };
 
@@ -28,6 +29,7 @@ describe('renderer update state', () => {
       appVersion: '2.1.4',
       latestVersion: '2.1.5',
       updateAvailable: true,
+      updateCheckEnabled: 1,
     });
   });
 
@@ -39,6 +41,7 @@ describe('renderer update state', () => {
           throw new Error('offline');
         }),
       },
+      localStorage: { getItem: vi.fn(() => null), setItem: vi.fn() },
     };
     const state = { appVersion: '', latestVersion: 'old', updateAvailable: true };
 
@@ -48,7 +51,61 @@ describe('renderer update state', () => {
       appVersion: '2.1.4',
       latestVersion: '',
       updateAvailable: false,
+      updateCheckEnabled: 1,
     });
+  });
+
+  it('skips GitHub entirely when update checks are disabled', async () => {
+    const checkForUpdates = vi.fn(async () => ({ updateAvailable: true }));
+    globalThis.window = {
+      electronAPI: {
+        getAppInfo: vi.fn(async () => ({ version: '2.1.4' })),
+        checkForUpdates,
+      },
+      localStorage: { getItem: vi.fn(() => '0'), setItem: vi.fn() },
+    };
+    const state = { appVersion: '', latestVersion: 'old', updateAvailable: true };
+
+    await updateMethods.initializeUpdateStatus.call(state);
+
+    expect(checkForUpdates).not.toHaveBeenCalled();
+    expect(state).toEqual({
+      appVersion: '2.1.4',
+      latestVersion: '',
+      updateAvailable: false,
+      updateCheckEnabled: 0,
+    });
+  });
+
+  it('persists preference changes and checks only after being enabled', async () => {
+    const checkForUpdates = vi.fn(async () => ({
+      currentVersion: '2.1.4',
+      latestVersion: '2.1.5',
+      updateAvailable: true,
+    }));
+    const localStorage = { getItem: vi.fn(), setItem: vi.fn() };
+    globalThis.window = { electronAPI: { checkForUpdates }, localStorage };
+    const state = {
+      appVersion: '2.1.4',
+      latestVersion: '2.1.5',
+      updateAvailable: true,
+      updateCheckEnabled: 1,
+    };
+
+    updateMethods.setUpdateCheckEnabled.call(state, 0);
+
+    expect(localStorage.setItem).toHaveBeenLastCalledWith('pigmi.update-check-enabled', '0');
+    expect(checkForUpdates).not.toHaveBeenCalled();
+    expect(state).toMatchObject({
+      latestVersion: '',
+      updateAvailable: false,
+      updateCheckEnabled: 0,
+    });
+
+    updateMethods.setUpdateCheckEnabled.call(state, 1);
+    await vi.waitFor(() => expect(checkForUpdates).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(state.updateAvailable).toBe(true));
+    expect(localStorage.setItem).toHaveBeenLastCalledWith('pigmi.update-check-enabled', '1');
   });
 
   it('opens releases only while an update is available', async () => {
@@ -58,7 +115,10 @@ describe('renderer update state', () => {
     await updateMethods.openUpdatePage.call({ updateAvailable: false });
     expect(openReleasesPage).not.toHaveBeenCalled();
 
-    await updateMethods.openUpdatePage.call({ updateAvailable: true });
+    await updateMethods.openUpdatePage.call({ updateAvailable: true, updateCheckEnabled: 0 });
+    expect(openReleasesPage).not.toHaveBeenCalled();
+
+    await updateMethods.openUpdatePage.call({ updateAvailable: true, updateCheckEnabled: 1 });
     expect(openReleasesPage).toHaveBeenCalledOnce();
   });
 

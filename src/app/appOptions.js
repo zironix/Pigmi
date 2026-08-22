@@ -55,6 +55,7 @@ export default {
       appVersion: '',
       latestVersion: '',
       updateAvailable: false,
+      updateCheckEnabled: 1,
 
       // Sidebar and split-view layout state.
       isItemSearchSplitVisible: false,

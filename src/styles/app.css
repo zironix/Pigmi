@@ -146,23 +146,29 @@ body {
 .top-controls .update-available {
   appearance: none;
   background: transparent;
-  border: 0;
-  color: #fdc822;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  color: #73777d;
   cursor: pointer;
-  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 400;
+  height: 19px;
+  letter-spacing: 0;
   line-height: 1;
-  padding: 2px;
-  transition:
-    color 0.2s ease,
-    transform 0.2s ease;
+  padding: 0 6px;
+  transition: color 0.15s ease;
+  white-space: nowrap;
   -webkit-app-region: no-drag;
 }
 .top-controls .update-available:hover {
-  color: #ffffff;
-  transform: translateY(-1px);
+  color: #a9aeb5;
 }
 .top-controls .update-available:focus-visible {
-  outline: 2px solid #fdc822;
+  outline: 2px solid #a9aeb5;
   outline-offset: 2px;
 }
 .top-controls .dragger {

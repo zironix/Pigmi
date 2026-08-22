@@ -18,14 +18,14 @@
         <div class="version">
           <span>v{{ appVersion || '…' }}</span>
           <button
-            v-if="updateAvailable"
+            v-if="updateAvailable && updateCheckEnabled"
             class="update-available"
             type="button"
             :title="`Pigmi ${latestVersion} is available — open GitHub Releases`"
             :aria-label="`Pigmi ${latestVersion} is available; open GitHub Releases`"
             @click.stop="openUpdatePage"
           >
-            <i class="las la-external-link-square-alt" aria-hidden="true"></i>
+            New version available
           </button>
         </div>
       </div>
@@ -600,6 +600,17 @@
             type="number"
             placeholder="New item size"
             v-model.number="texture.update_interval"
+          />
+        </div>
+        <div class="custom-input">
+          <div class="name">Check for updates</div>
+          <VueSelect
+            v-model="updateCheckEnabled"
+            :options="[
+              { label: 'Enabled', value: 1 },
+              { label: 'Disabled', value: 0 },
+            ]"
+            @update:model-value="setUpdateCheckEnabled"
           />
         </div>
       </div>
