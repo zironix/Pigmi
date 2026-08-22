@@ -5,13 +5,18 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 import { PigmiBridgeClient } from './bridge-client.mjs';
-import { FULL_PIGMI_MCP_INSTRUCTIONS, PIGMI_EDIT_PROMPT } from './instructions.mjs';
+import {
+  FULL_PIGMI_MCP_INSTRUCTIONS,
+  PIGMI_EDIT_PROMPT,
+  PIGMI_SERVER_INSTRUCTIONS,
+} from './instructions.mjs';
 import { getOperationReference } from './operation-reference.mjs';
+import { errorToolResult, jsonToolResult } from './tool-results.mjs';
 
 const bridge = new PigmiBridgeClient();
 const server = new McpServer(
-  { name: 'pigmi', version: '1.4.0' },
-  { instructions: FULL_PIGMI_MCP_INSTRUCTIONS },
+  { name: 'pigmi', version: '1.4.1' },
+  { instructions: PIGMI_SERVER_INSTRUCTIONS },
 );
 
 const itemRequestSchema = z.object({
@@ -113,25 +118,11 @@ const layoutSchema = z
   .nullable()
   .optional();
 
-function textResult(result) {
-  return {
-    content: [{ type: 'text', text: JSON.stringify(result) }],
-    structuredContent: result,
-  };
-}
-
-function errorResult(error) {
-  return {
-    isError: true,
-    content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
-  };
-}
-
 async function callBridge(method, params) {
   try {
-    return textResult(await bridge.call(method, params));
+    return jsonToolResult(await bridge.call(method, params));
   } catch (error) {
-    return errorResult(error);
+    return errorToolResult(error);
   }
 }
 
@@ -147,7 +138,10 @@ server.registerPrompt(
     messages: [
       {
         role: 'user',
-        content: { type: 'text', text: `${PIGMI_EDIT_PROMPT}\n${request}` },
+        content: {
+          type: 'text',
+          text: `${FULL_PIGMI_MCP_INSTRUCTIONS}\n\n${PIGMI_EDIT_PROMPT}\n${request}`,
+        },
       },
     ],
   }),
@@ -157,7 +151,7 @@ server.registerTool(
   'pigmi_get_overview',
   {
     description:
-      'Start here. Returns compact settings, selection, flat semantic paths, folder canvas bounds, and hierarchy validation without item payloads.',
+      'Start every document task here, once. Returns revision, defaults, selection, semantic paths, folder bounds, and hierarchy validity. For a straightforward new palette, call pigmi_create_items next without another read.',
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async () => callBridge('get_overview', {}),
@@ -167,7 +161,7 @@ server.registerTool(
   'pigmi_get_items',
   {
     description:
-      'Fetch only the fields needed for matching items, or get a compact palette inventory. For template variants, fetch corresponding items from the relevant source folders before recoloring duplicates.',
+      'After overview, fetch only necessary fields for exact items or a compact palette inventory. Skip this for a straightforward new palette whose request and overview already provide enough evidence.',
     inputSchema: { requests: z.array(itemRequestSchema).min(1).max(4) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
@@ -178,7 +172,7 @@ server.registerTool(
   'pigmi_get_folders',
   {
     description:
-      'Fetch exact folders as complete templates with bounds, nested relative paths, and only requested item fields. Use for variants or edits that must preserve hierarchy.',
+      'After overview, fetch exact folders as complete templates with bounds, relative paths, and only requested fields. Use when a variant or edit must preserve an existing hierarchy.',
     inputSchema: {
       paths: z.array(z.string().min(1)).min(1).max(8),
       fields: z.array(detailFieldSchema).default([]),
@@ -192,7 +186,7 @@ server.registerTool(
   'pigmi_compare_folders',
   {
     description:
-      'Aligns sibling folders by exact relative paths and returns placements, missing roles, and requested field differences. Use before extending a repeated family.',
+      'After overview, align relevant sibling folders by relative path and return raw placements and requested differences. Use only when extending an existing repeated family.',
     inputSchema: {
       paths: z.array(z.string().min(1)).min(2).max(8),
       fields: z.array(detailFieldSchema).default([]),
@@ -206,7 +200,7 @@ server.registerTool(
   'pigmi_validate_document',
   {
     description:
-      'Checks the active document for hierarchy/payload mismatches, duplicate ids or semantic paths, invalid gradients/material values, and items outside the canvas. Use after complex structural edits when verification is useful.',
+      'Checks hierarchy, ids, paths, gradients, materials, and canvas bounds. Reserve for complex or suspicious structural edits; routine successful palette creation does not need it.',
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async () => callBridge('validate_document', {}),
@@ -216,7 +210,7 @@ server.registerTool(
   'pigmi_duplicate_folder_variants',
   {
     description:
-      'Duplicates complete folder templates. Infer names and source-relative offsets from inspected siblings; itemEdits address generated children by exact relative path.',
+      'Specialized write for complete folder variants. After overview and only the relevant folder evidence, infer exact names and source-relative offsets, then write directly without an operation reference.',
     inputSchema: {
       sourcePath: z.string().min(1),
       variants: z
@@ -253,7 +247,7 @@ server.registerTool(
   'pigmi_edit_folder_items',
   {
     description:
-      'Edits exact semantic roles inside one or more existing folders. Each item is addressed by its path relative to that folder, avoiding generated ids and accidental matches in other subtrees.',
+      'Specialized write for exact roles inside existing folders. Address items by relative path and write directly after the necessary read; no generic operation reference is needed.',
     inputSchema: {
       folders: z
         .array(
@@ -286,7 +280,7 @@ server.registerTool(
   'pigmi_create_items',
   {
     description:
-      'Creates genuinely new gradient or material items. Continue inspected local geometry when clear; otherwise use compact left-to-right, then top-to-bottom layout.',
+      'Fast path for straightforward new palettes: after one overview, create all requested items directly. Infer names and clear local geometry; otherwise use compact left-to-right then top-to-bottom. Do not fetch an operation reference, dry-run, preview, or validate unless ambiguity requires it.',
     inputSchema: {
       items: z.array(gradientItemSchema).min(1).max(200),
       defaults: gradientItemSchema.partial().optional(),
@@ -310,18 +304,18 @@ server.registerTool(
   'pigmi_get_operation_reference',
   {
     description:
-      'Returns concise argument references for requested edit operation types. Request only the operations you plan to use.',
+      'Returns references only for a planned generic pigmi_apply_operations call. Never use before pigmi_create_items, pigmi_duplicate_folder_variants, or pigmi_edit_folder_items.',
     inputSchema: { operations: z.array(z.string()).min(1).max(20) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
-  async ({ operations }) => textResult({ operations: getOperationReference(operations) }),
+  async ({ operations }) => jsonToolResult({ operations: getOperationReference(operations) }),
 );
 
 server.registerTool(
   'pigmi_apply_operations',
   {
     description:
-      'Atomically applies typed operations to the active Pigmi document. Pass expectedRevision from a read to prevent stale writes. Created items are not selected unless set_selection is explicit. Use dryRun for uncertain plans.',
+      'Generic atomic write for operations not covered by specialized tools. First request references only for the operation types used. Pass expectedRevision; use dryRun only when a concrete ambiguity makes it useful.',
     inputSchema: {
       operations: z.array(z.record(z.string(), z.unknown())).max(500),
       expectedRevision: z.string().optional(),
@@ -346,7 +340,8 @@ server.registerTool(
 server.registerTool(
   'pigmi_get_canvas_preview',
   {
-    description: 'Returns the current rendered Pigmi canvas as a PNG image.',
+    description:
+      'Returns the rendered canvas as PNG. Use only when visual evidence is needed; routine successful writes do not require a preview.',
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async () => {
@@ -361,7 +356,7 @@ server.registerTool(
         ],
       };
     } catch (error) {
-      return errorResult(error);
+      return errorToolResult(error);
     }
   },
 );
@@ -369,7 +364,8 @@ server.registerTool(
 server.registerTool(
   'pigmi_get_project',
   {
-    description: 'Lists JSON documents in the current Pigmi project and identifies the open one.',
+    description:
+      'Lists project documents and the open one. Use only for an explicit project/document request.',
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async () => callBridge('get_project', {}),
@@ -378,7 +374,7 @@ server.registerTool(
 server.registerTool(
   'pigmi_open_document',
   {
-    description: 'Opens an existing JSON document from the current Pigmi project.',
+    description: 'Opens an existing project document only when the user requests it.',
     inputSchema: { name: z.string().min(1) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   },
@@ -388,7 +384,8 @@ server.registerTool(
 server.registerTool(
   'pigmi_save_document',
   {
-    description: 'Saves the active Pigmi document. Optionally exports all enabled texture maps.',
+    description:
+      'Saves the active document and optionally exports enabled maps. Do not save unless requested or required by the task.',
     inputSchema: { exportMaps: z.boolean().default(false) },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   },

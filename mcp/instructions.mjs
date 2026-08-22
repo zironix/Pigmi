@@ -1,3 +1,8 @@
+// MCP clients may repeat server-wide instructions beside every tool. Keep this
+// bootstrap deliberately short; the optional edit prompt carries the detailed
+// workflow when a client explicitly requests it.
+export const PIGMI_SERVER_INSTRUCTIONS = `Pigmi edits the active visual palette document. For edits, call pigmi_get_overview once, then use the narrowest necessary read and a specialized write. A straightforward new palette needs only overview then pigmi_create_items. Infer exact naming, language/script, hierarchy, colors, and placement from the request and nearest document evidence; never hardcode domain conventions. Explicit instructions win; unclear placement falls back left-to-right, then top-to-bottom. Pass expectedRevision, avoid repeated reads, operation references, dry runs, previews, or validation unless they add necessary information, and never change selection or edit project JSON directly.`;
+
 export const PIGMI_MCP_INSTRUCTIONS = `Pigmi is a visual texture-palette editor. Make the smallest change that satisfies the user's literal request. Start every editor task with pigmi_get_overview. Never read or edit Pigmi project JSON through the filesystem, shell, or text editor; all document work goes through Pigmi MCP tools. If Pigmi is unavailable, stop and ask the user to reconnect it. Pass expectedRevision on writes, and never change selection unless requested.
 
 Workflow:

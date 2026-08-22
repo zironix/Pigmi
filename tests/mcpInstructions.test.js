@@ -4,6 +4,7 @@ import {
   FULL_PIGMI_MCP_INSTRUCTIONS,
   PIGMI_EDIT_PROMPT,
   PIGMI_MCP_INSTRUCTIONS,
+  PIGMI_SERVER_INSTRUCTIONS,
 } from '../mcp/instructions.mjs';
 import { getOperationReference } from '../mcp/operation-reference.mjs';
 
@@ -117,5 +118,16 @@ describe('Pigmi MCP instructions', () => {
     expect(PIGMI_EDIT_PROMPT.trim().split(/\s+/).length).toBeLessThan(100);
     expect(getOperationReference([])).toEqual({});
     expect(Object.keys(getOperationReference(['rename_item']))).toEqual(['rename_item']);
+  });
+
+  it('keeps repeated server instructions tiny and defines a two-call simple-palette path', () => {
+    expect(PIGMI_SERVER_INSTRUCTIONS.trim().split(/\s+/).length).toBeLessThan(100);
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('pigmi_get_overview once');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain(
+      'straightforward new palette needs only overview then pigmi_create_items',
+    );
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('never hardcode domain conventions');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('left-to-right, then top-to-bottom');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('avoid repeated reads');
   });
 });

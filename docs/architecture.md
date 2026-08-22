@@ -109,10 +109,11 @@ write instead of applying it to a document changed by the user in the meantime. 
 operation warning rejects the complete request. `dryRun` validates and previews generated IDs
 without mutating the editor.
 
-Server-wide MCP instructions provide behavioral defaults independently of any particular model or
-client. They require progressive reads, literal treatment of reference images, minimal changes,
-compact semantic palettes, and explicit selection changes. The optional MCP prompt wraps the same
-workflow for clients that expose prompt templates.
+Some MCP clients repeat server-wide instructions beside every tool, so Pigmi keeps that bootstrap
+deliberately short. It defines the safe fast path and model-driven convention inference without
+duplicating the complete workflow across the model context. Detailed reference-image, material,
+variant, and layout guidance is supplied by the optional MCP prompt for clients that request it.
+Straightforward palette creation should take two tool calls: one overview and one specialized write.
 
 ### Local bridge security
 
