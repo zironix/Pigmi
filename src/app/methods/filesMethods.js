@@ -1,3 +1,23 @@
+async function loadProjectImage(filePath) {
+  // Chromium may reject arbitrary file:// URLs from a context-isolated
+  // renderer. Read only an authorized project file through the main process
+  // and decode it from a renderer-owned Blob URL instead.
+  const contents = await window.electronAPI.readBinaryFile(filePath);
+  const objectUrl = URL.createObjectURL(new Blob([contents], { type: 'image/png' }));
+  const image = new Image();
+
+  try {
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error(`Failed to load mix texture: ${filePath}`));
+      image.src = objectUrl;
+    });
+    return image;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export const fileMethods = {
   async selectFolder() {
     const folderPath = await window.electronAPI.selectFolder();
@@ -70,75 +90,60 @@ export const fileMethods = {
     };
 
     if (exists) {
-      const mix_url = `${window.electronAPI.toFileUrl(mixFilePath)}?${Date.now()}${type}`;
-      const image = new Image();
-      image.crossOrigin = 'anonymous';
+      const image = await loadProjectImage(mixFilePath);
+      this[`ctx_${type}`].drawImage(image, 0, 0);
 
-      await new Promise((resolve, reject) => {
-        image.onload = async () => {
-          try {
-            this[`ctx_${type}`].drawImage(image, 0, 0);
+      // Preserve emissive pixels while blending an existing albedo mix texture.
+      if (type === 'albedo') {
+        const emission_data = this[`ctx_emission`].getImageData(
+          0,
+          0,
+          this.texture.width,
+          this.texture.height,
+        );
 
-            // Preserve emissive pixels while blending an existing albedo mix texture.
-            if (type === 'albedo') {
-              const emission_data = this[`ctx_emission`].getImageData(
-                0,
-                0,
-                this.texture.width,
-                this.texture.height,
-              );
+        const emission_crop_data = this[`ctx_emission_crop`].getImageData(
+          0,
+          0,
+          this.texture.width,
+          this.texture.height,
+        );
 
-              const emission_crop_data = this[`ctx_emission_crop`].getImageData(
-                0,
-                0,
-                this.texture.width,
-                this.texture.height,
-              );
+        const imgBitmap1 = await createImageBitmap(
+          emission_crop_data,
+          0,
+          0,
+          this.texture.width,
+          this.texture.height,
+        );
+        this[`ctx_emission`].globalCompositeOperation = 'source-over';
+        this[`ctx_emission`].drawImage(imgBitmap1, 0, 0);
 
-              const imgBitmap1 = await createImageBitmap(
-                emission_crop_data,
-                0,
-                0,
-                this.texture.width,
-                this.texture.height,
-              );
-              this[`ctx_emission`].globalCompositeOperation = 'source-over';
-              this[`ctx_emission`].drawImage(imgBitmap1, 0, 0);
+        this[`ctx_emission`].globalCompositeOperation = 'source-in';
+        this[`ctx_emission`].drawImage(image, 0, 0);
 
-              this[`ctx_emission`].globalCompositeOperation = 'source-in';
-              this[`ctx_emission`].drawImage(image, 0, 0);
+        const imgBitmap2 = await createImageBitmap(
+          emission_data,
+          0,
+          0,
+          this.texture.width,
+          this.texture.height,
+        );
+        this[`ctx_emission`].globalCompositeOperation = 'source-over';
+        this[`ctx_emission`].drawImage(imgBitmap2, 0, 0);
+      }
 
-              const imgBitmap2 = await createImageBitmap(
-                emission_data,
-                0,
-                0,
-                this.texture.width,
-                this.texture.height,
-              );
-              this[`ctx_emission`].globalCompositeOperation = 'source-over';
-              this[`ctx_emission`].drawImage(imgBitmap2, 0, 0);
-            }
+      if (this.texture.mix_preview) {
+        this.ctx.drawImage(
+          image,
+          0,
+          0,
+          this.texture.width * this.finalZoom,
+          this.texture.height * this.finalZoom,
+        );
+      }
 
-            if (this.texture.mix_preview) {
-              this.ctx.drawImage(
-                image,
-                0,
-                0,
-                this.texture.width * this.finalZoom,
-                this.texture.height * this.finalZoom,
-              );
-            }
-
-            await writeCanvas();
-            resolve();
-          } catch (error) {
-            reject(error);
-          }
-        };
-        image.onerror = () => reject(new Error(`Failed to load mix texture: ${mixFilePath}`));
-
-        image.src = mix_url;
-      });
+      await writeCanvas();
     } else {
       await writeCanvas();
     }

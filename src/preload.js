@@ -31,6 +31,7 @@ const electronApi = Object.freeze({
   openFolder: invoke(IPC_CHANNELS.openFolder),
   platform: process.platform,
   readDir: invoke(IPC_CHANNELS.readDirectory),
+  readBinaryFile: invoke(IPC_CHANNELS.readBinaryFile),
   readTextFile: invoke(IPC_CHANNELS.readTextFile),
   selectFolder: invoke(IPC_CHANNELS.selectFolder),
   selectImageFile: invoke(IPC_CHANNELS.selectImageFile),

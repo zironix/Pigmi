@@ -115,6 +115,11 @@ export function registerFileHandlers(ipcMain) {
     return fs.readFile(targetPath, 'utf8');
   });
 
+  ipcMain.handle(IPC_CHANNELS.readBinaryFile, async (_event, filePath) => {
+    const targetPath = await assertAuthorizedProjectPath(assertPath(filePath, 'filePath'));
+    return new Uint8Array(await fs.readFile(targetPath));
+  });
+
   ipcMain.handle(IPC_CHANNELS.writeTextFile, async (_event, filePath, contents) => {
     const targetPath = await assertAuthorizedProjectPath(assertPath(filePath, 'filePath'));
     await ensureParentDirectory(targetPath);

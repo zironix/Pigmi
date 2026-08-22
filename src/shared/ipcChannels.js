@@ -3,6 +3,7 @@ export const IPC_CHANNELS = Object.freeze({
   selectImageFile: 'select-image-file',
   readDirectory: 'read-dir',
   fileExists: 'file-exists',
+  readBinaryFile: 'read-binary-file',
   readTextFile: 'read-text-file',
   writeTextFile: 'write-text-file',
   writeBinaryFile: 'write-binary-file',
