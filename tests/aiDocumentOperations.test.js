@@ -230,6 +230,72 @@ describe('AI document operations', () => {
     expect(document.layersStore.active_id).toBe(102);
   });
 
+  it('preserves user-provided naming style and script exactly', () => {
+    const document = makeDocument();
+    let nextId = 999;
+    const result = applyAiPlan({
+      ...document,
+      nextLayerId: () => nextId++,
+      plan: {
+        operations: [
+          {
+            type: 'create_gradient_item',
+            name: 'акцент_01',
+            folderPath: 'набор_01',
+            colors: ['#112233', '#445566'],
+          },
+        ],
+      },
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(document.texture.items.find((item) => item.id === 1000)?.name).toBe('акцент_01');
+    expect(document.texture.layers[0]).toMatchObject({
+      name: 'набор_01',
+      childs: [{ name: 'акцент_01' }],
+    });
+  });
+
+  it('duplicates an exact target into another folder without renaming it', () => {
+    const document = makeDocument();
+    let nextId = 1000;
+    const result = applyAiPlan({
+      ...document,
+      nextLayerId: () => nextId++,
+      plan: {
+        operations: [
+          {
+            type: 'duplicate_item',
+            target: { id: 102 },
+            folderPath: 'варианты/дополнительные',
+          },
+        ],
+      },
+    });
+
+    expect(result.warnings).toEqual([]);
+    const duplicate = document.texture.items.find((item) => item.id === result.createdItemIds[0]);
+    expect(duplicate?.name).toBe('Glass');
+    expect(document.texture.layers[0]).toMatchObject({
+      name: 'варианты',
+      childs: [{ name: 'дополнительные', childs: [{ name: 'Glass' }] }],
+    });
+  });
+
+  it('rejects a same-folder duplicate when no safe name was supplied', () => {
+    const document = makeDocument();
+    const result = applyAiPlan({
+      ...document,
+      nextLayerId: () => 999,
+      plan: { operations: [{ type: 'duplicate_item', target: { id: 102 } }] },
+    });
+
+    expect(result.createdItemIds).toEqual([]);
+    expect(result.warnings).toEqual([
+      'op#1: duplicate_item newName is required in the same folder',
+    ]);
+  });
+
   it('creates and updates PBR materials with per-stop opacity', () => {
     const document = makeDocument();
     applyAiPlan({
@@ -383,6 +449,56 @@ describe('AI document operations', () => {
     expect(chimney.colors.map((entry) => entry.rgba)).toEqual(
       document.texture.items[3].colors.map((entry) => entry.rgba),
     );
+  });
+
+  it('applies model-inferred source-relative offsets without changing group geometry', () => {
+    const document = makeHouseDocument();
+    document.texture.layers[0].name = 'вариант_01';
+    let nextId = 1000;
+
+    const result = applyAiPlan({
+      ...document,
+      nextLayerId: () => nextId++,
+      plan: {
+        operations: [
+          {
+            type: 'duplicate_folder',
+            sourcePath: 'вариант_01',
+            newPath: 'вариант_02',
+            offset: { x: 0, y: 128 },
+          },
+          {
+            type: 'duplicate_folder',
+            sourcePath: 'вариант_01',
+            newPath: 'вариант_03',
+            offset: { x: 0, y: 256 },
+          },
+        ],
+      },
+    });
+
+    expect(result.warnings).toEqual([]);
+    const getFolderPositions = (folderName) => {
+      const folder = document.texture.layers.find((node) => node.name === folderName);
+      const itemIds = [folder.childs[0].id, folder.childs[1].id];
+      return itemIds.map((id) => {
+        const item = document.texture.items.find((candidate) => candidate.id === id);
+        return { x: item.x, y: item.y };
+      });
+    };
+
+    expect(getFolderPositions('вариант_01')).toEqual([
+      { x: 0, y: 0 },
+      { x: 32, y: 0 },
+    ]);
+    expect(getFolderPositions('вариант_02')).toEqual([
+      { x: 0, y: 128 },
+      { x: 32, y: 128 },
+    ]);
+    expect(getFolderPositions('вариант_03')).toEqual([
+      { x: 0, y: 256 },
+      { x: 32, y: 256 },
+    ]);
   });
 
   it('edits exact roles inside existing folders without touching siblings', () => {

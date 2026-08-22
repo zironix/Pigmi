@@ -8,29 +8,74 @@ import {
 import { getOperationReference } from '../mcp/operation-reference.mjs';
 
 describe('Pigmi MCP instructions', () => {
-  it('keeps the critical workflow self-contained near the beginning', () => {
-    const opening = PIGMI_MCP_INSTRUCTIONS.slice(0, 1024);
+  it('keeps the safe progressive workflow self-contained', () => {
+    const requiredTerms = [
+      'pigmi_get_overview',
+      'pigmi_get_items',
+      'expectedRevision',
+      'Never read or edit Pigmi project JSON',
+      'never change selection unless requested',
+      'Do not repeat unchanged reads',
+    ];
 
-    expect(opening).toContain('pigmi_get_overview');
-    expect(opening).toContain('pigmi_get_items');
-    expect(opening).toContain('expectedRevision');
-    expect(opening).toContain('never fall back to direct JSON editing');
-    expect(opening).toContain('never select newly created items');
+    requiredTerms.forEach((term) => expect(PIGMI_MCP_INSTRUCTIONS).toContain(term));
   });
 
-  it('covers faithful image interpretation without hardcoded object assumptions', () => {
-    expect(PIGMI_MCP_INSTRUCTIONS).toContain('small but semantically important accents');
-    expect(PIGMI_MCP_INSTRUCTIONS).toContain('stereotypical colors');
-    expect(PIGMI_MCP_INSTRUCTIONS).toContain('Never hardcode object-specific');
-    expect(PIGMI_EDIT_PROMPT).toContain('visible evidence rather than object stereotypes');
+  it('makes the model infer local naming and layout without domain hardcoding', () => {
+    const expectedTerms = [
+      'The model must infer conventions',
+      'Never rely on hardcoded domain vocabulary',
+      'nearest relevant existing siblings',
+      'folder bounds',
+      'item transforms',
+      'language or script',
+      'numbering style',
+      'zero padding',
+      'local spatial convention',
+      'every offset is relative to sourcePath',
+      'left-to-right, then top-to-bottom fallback',
+    ];
+
+    expectedTerms.forEach((term) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(term));
+    expect(PIGMI_EDIT_PROMPT).toContain('never use hardcoded domain conventions');
+    expect(PIGMI_EDIT_PROMPT).toContain('bounds/transforms');
   });
 
-  it('turns a finished palette image into a bounded batch workflow', () => {
-    expect(PIGMI_MCP_INSTRUCTIONS).toContain('finished palette, swatch sheet, or gradient grid');
-    expect(PIGMI_MCP_INSTRUCTIONS).toContain('one create_gradient_items operation');
-    expect(PIGMI_MCP_INSTRUCTIONS).toContain('Do not open a browser');
-    expect(PIGMI_MCP_INSTRUCTIONS).toContain('continue analyzing indefinitely');
-    expect(PIGMI_EDIT_PROMPT).toContain('without waiting for an external pixel sampler');
+  it('preserves complete repeated structures and exact requested counts', () => {
+    const expectedTerms = [
+      'pigmi_get_folders',
+      'pigmi_compare_folders',
+      'pigmi_duplicate_folder_variants',
+      'pigmi_edit_folder_items',
+      'full semantic paths',
+      'Existing hierarchy is the template',
+      'For N requested variants, create exactly N complete',
+      'color-only variant preserves PBR values',
+    ];
+
+    expectedTerms.forEach((term) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(term));
+
+    const reference = getOperationReference(['duplicate_folder', 'edit_folder_items']);
+    expect(reference.duplicate_folder.notes).toEqual(
+      expect.arrayContaining([expect.stringContaining('successive multiples')]),
+    );
+    expect(reference.edit_folder_items.itemEdits[0]).toMatchObject({
+      relativePath: expect.any(String),
+      material: expect.any(Object),
+      visible: expect.any(String),
+    });
+  });
+
+  it('covers faithful image interpretation and bounded palette creation', () => {
+    const expectedTerms = [
+      'finished palette, swatch sheet, or gradient grid',
+      'visible evidence',
+      'small accents',
+      'Inspect attached images directly',
+      'one bounded create batch',
+    ];
+
+    expectedTerms.forEach((term) => expect(PIGMI_MCP_INSTRUCTIONS).toContain(term));
 
     const reference = getOperationReference(['create_gradient_items']);
     expect(reference.create_gradient_items.itemSchema).toMatchObject({
@@ -41,64 +86,17 @@ describe('Pigmi MCP instructions', () => {
     });
   });
 
-  it('preserves the legacy editor behavior rules in the model-independent prompt', () => {
-    const expectedRules = [
-      'target.ids',
-      'target.all',
-      'full semantic path',
-      'duplicate_folder',
-      'duplicate_folder.itemEdits',
-      'itemType sg',
-      'radial, conic, stepped, or black-to-white',
-      'maxItemSize',
-      'colorOffsets',
-      'N clearly different sets',
-      'itemsPerRow',
-      'itemsPerColumn',
-      'startRow 1 maps to y=0',
-      'offsetCells',
-    ];
-
-    expectedRules.forEach((rule) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(rule));
-  });
-
-  it('routes repeated structures through semantic folder tools', () => {
+  it('describes material and opacity behavior with actionable field names', () => {
     const expectedTerms = [
-      'pigmi_get_folders',
-      'pigmi_compare_folders',
-      'pigmi_duplicate_folder_variants',
-      'pigmi_edit_folder_items',
-      'exactly N complete sibling folders',
-      'complete semantic path',
-      'semantically stable material parts',
-      'PBR values as part of the semantic material',
-      'colors only',
-    ];
-    expectedTerms.forEach((term) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(term));
-
-    const reference = getOperationReference(['duplicate_folder', 'edit_folder_items']);
-    expect(reference.duplicate_folder.itemEdits[0]).toMatchObject({
-      relativePath: expect.any(String),
-      colors: expect.any(Array),
-      material: expect.any(Object),
-    });
-    expect(reference.edit_folder_items.itemEdits[0]).toMatchObject({
-      relativePath: expect.any(String),
-      material: expect.any(Object),
-      visible: expect.any(String),
-    });
-  });
-
-  it('describes PBR materials and per-stop opacity as actionable features', () => {
-    const expectedMaterialTerms = [
       'roughness',
       'metallic',
-      'emissionStrength',
+      'emission strength',
       'clearcoat roughness',
-      'Opacity is stored per color stop',
+      'Opacity belongs to color stops',
       'MRC packs metallic, roughness, and clearcoat',
     ];
-    expectedMaterialTerms.forEach((term) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(term));
+
+    expectedTerms.forEach((term) => expect(FULL_PIGMI_MCP_INSTRUCTIONS).toContain(term));
 
     const reference = getOperationReference(['create_gradient_item', 'update_item']);
     expect(reference.create_gradient_item.material).toMatchObject({
@@ -112,5 +110,12 @@ describe('Pigmi MCP instructions', () => {
       opacity: expect.stringContaining('0..100'),
       opacities: expect.any(Array),
     });
+  });
+
+  it('keeps fixed instructions compact and never returns every operation by default', () => {
+    expect(FULL_PIGMI_MCP_INSTRUCTIONS.trim().split(/\s+/).length).toBeLessThan(1000);
+    expect(PIGMI_EDIT_PROMPT.trim().split(/\s+/).length).toBeLessThan(100);
+    expect(getOperationReference([])).toEqual({});
+    expect(Object.keys(getOperationReference(['rename_item']))).toEqual(['rename_item']);
   });
 });

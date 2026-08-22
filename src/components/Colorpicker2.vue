@@ -349,7 +349,7 @@ export default {
     },
   }),
   computed: {
-    // геттер вычисляемого значения
+    // Position the hue marker from the current HSVA value.
     hueLeft() {
       return (this.color.hsv.h * 100) / 360 + '%';
     },

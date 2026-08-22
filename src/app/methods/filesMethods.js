@@ -43,7 +43,7 @@ export const fileMethods = {
         const files = await window.electronAPI.readDir(this.folder_path);
 
         files.forEach((file) => {
-          // Проверяем, что это файл (не директория) и имеет расширение .json
+          // Project entries are JSON files; directories and other files are ignored.
           if (file.isFile) {
             const ext = file.name.substr(-5);
             if (ext === '.json') {

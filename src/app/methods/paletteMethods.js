@@ -41,7 +41,7 @@ export const paletteMethods = {
         break;
       }
 
-      case 'noise': // новый стиль
+      case 'noise':
         for (let i = 0; i < n; i++) {
           for (let j = i + 1; j < n; j++) {
             const value = Math.floor(Math.random() * 81) + 10; // 10–90
@@ -52,10 +52,10 @@ export const paletteMethods = {
 
       case 'website':
         if (n >= 4) {
-          setSym(0, 1, 90); // фон - текст
-          setSym(0, 2, 20); // фон - navbar
-          setSym(1, 2, 70); // текст - navbar
-          setSym(2, 3, 85); // navbar - logo
+          setSym(0, 1, 90); // background - text
+          setSym(0, 2, 20); // background - navigation
+          setSym(1, 2, 70); // text - navigation
+          setSym(2, 3, 85); // navigation - logo
         }
         for (let i = 0; i < n; i++) {
           for (let j = i + 1; j < n; j++) {
@@ -144,11 +144,7 @@ export const paletteMethods = {
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      // Тут мы ждём распарсенный JSON
       const data = await res.json();
-
-      // убедимся что структура как ожидается
-      //console.log('first palette:', data.results[0].palette); // массив из 4 цветов
 
       if (
         data.results &&
@@ -156,14 +152,13 @@ export const paletteMethods = {
         data.results[0].palette &&
         data.results[0].palette.length === colors_count
       ) {
-        // Создаем новый массив цветов вместо мутирования существующего
+        // Replace nested objects so Vue observes the generated palette immediately.
         const updatedColors = this.texture.items[this.selected].colors.map((color, i) => {
           if (i < data.results[0].palette.length) {
             const hexColor = data.results[0].palette[i];
             const hsva = LinearColorInterpolator.hexAToHSVA(hexColor + 'ff');
             const rgba = LinearColorInterpolator.hexAToRGBA(hexColor + 'ff');
 
-            // Возвращаем новый объект вместо мутирования существующего
             return {
               ...color,
               hsva: { h: hsva.h, s: hsva.s, v: hsva.v, a: hsva.a },
@@ -173,17 +168,15 @@ export const paletteMethods = {
           return color;
         });
 
-        // Создаем новый объект для реактивного обновления
         const updatedItem = {
           ...this.texture.items[this.selected],
           colors: updatedColors,
         };
 
-        // Обновляем реактивно
         this.texture.items[this.selected] = updatedItem;
       }
     } catch (err) {
-      console.error('Ошибка генерации цветов:', err);
+      console.error('Failed to generate colors:', err);
     }
   },
 };

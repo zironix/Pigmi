@@ -2,8 +2,7 @@ import LinearColorInterpolator from '../../plugins/linearColorInterpolator';
 
 export const canvasRenderMethods = {
   draw() {
-    //console.log(this.texture)
-    //очищаем весь канвас
+    // Clear both the visible preview and every exported material channel.
     this.ctx.clearRect(
       0,
       0,
@@ -19,13 +18,12 @@ export const canvasRenderMethods = {
     this.ctx_clearcoat_roughness.clearRect(0, 0, this.texture.width, this.texture.height);
     this.ctx_mrc.clearRect(0, 0, this.texture.width, this.texture.height);
 
-    //идем по всем айтемам
     this.texture.items.forEach((item) => {
       if (item.visible === false) {
         return;
       }
 
-      //если был изменен тип и есть несоответствия
+      // Normalize size after switching between regular and stepped gradients.
       let last_item_size_flat = 0;
       if (Array.isArray(item.size)) {
         if (/^\d+$/.test(item.size[0])) {
@@ -49,29 +47,12 @@ export const canvasRenderMethods = {
         if (!Array.isArray(item.size)) {
           item.size = [last_item_size_flat, last_item_size_flat];
         }
-        /*if(item.colors.length !== 2){
-            item.colors = [
-              {
-                rgba: { r: 0, g: 0, b: 0, a: 1 },
-                hsva: { h: 0, s: 0, v: 0, a: 1 },
-                id: new Date().getTime() + 1
-              },
-              {
-                rgba: { r: 255, g: 255, b: 255, a: 1 },
-                hsva: { h: 0, s: 0, v: 100, a: 1 },
-                id: new Date().getTime() + 2
-              },
-            ];
-          }*/
       }
       if (item.type === 'sg') {
         if (Array.isArray(item.size)) {
           item.size = last_item_size_flat;
         }
       }
-
-      //***
-
       const roughness = parseFloat((255 / 100) * item.roughness).toFixed(2);
       this.ctx_roughness.fillStyle = 'rgb(' + roughness + ', ' + roughness + ', ' + roughness + ')';
 
@@ -102,9 +83,8 @@ export const canvasRenderMethods = {
         Math.max(parseFloat((1 / 100) * item.clearcoat_roughness).toFixed(2), 0.01) +
         ')';
 
-      //если градиент ступенчатый
       if (item.type === 'sg') {
-        //если больше одного цвета и от черного к белому - рисуем обычный ступенчатый градиент
+        // Interpolate between every adjacent pair in a multi-color stepped gradient.
         if (item.colors.length > 1 && item.color_mode !== 'black_to_white') {
           for (let c = 1; c < item.colors.length; c++) {
             for (let i = 0; i <= item.steps - 1; i++) {
@@ -131,7 +111,6 @@ export const canvasRenderMethods = {
                 Math.floor((100 / (item.steps - 1)) * i),
                 item.color_mode,
               );
-              //console.log(this.search)
               if (item.direction === 'horizontal') {
                 if (
                   this.search === '' ||
@@ -304,7 +283,7 @@ export const canvasRenderMethods = {
             }
           }
         } else {
-          //если только один цвет - рисуем одноцветные квадратики в зависимости от выбранного направления
+          // A single color becomes repeated solid cells along the selected axis.
           if (item.color_mode !== 'black_to_white') {
             this.ctx.fillStyle =
               'rgba(' +
@@ -419,7 +398,7 @@ export const canvasRenderMethods = {
               this.ctx_mrc.fillRect(item.x, item.y, item.size, item.size * item.steps);
             }
           } else {
-            //иначе рисуем градиент между белым и черным цветом
+            // The black-to-white mode expands one color in both directions.
             for (let i = 1; i <= item.steps * 2 + 1; i++) {
               const black = { r: 0, g: 0, b: 0, a: 1 };
               const white = { r: 255, g: 255, b: 255, a: 1 };
@@ -464,9 +443,6 @@ export const canvasRenderMethods = {
                   'rgb',
                 );
               }
-
-              //this.ctx_albedo.fillStyle = LinearColorInterpolator.findColorBetween(color_from.color, color_to.color, Math.floor(100 / (item.steps - 1) * i), item.color_mode);
-              //this.ctx_emission.fillStyle = LinearColorInterpolator.findColorBetween(color_from.color, color_to.color, Math.floor(100 / (item.steps - 1) * i), item.color_mode);
 
               if (item.direction === 'horizontal') {
                 if (
@@ -627,7 +603,7 @@ export const canvasRenderMethods = {
           }
         }
       } else {
-        //если градиент обычный
+        // Regular gradients fill one rectangle instead of a sequence of cells.
         let gradient = false;
         let gradient_albedo = false;
         let gradient_emission = false;
@@ -804,12 +780,6 @@ export const canvasRenderMethods = {
                 ')',
             );
           });
-          /*gradient.addColorStop(item.color_offsets[0]/100, "rgba(" + item.colors[0].rgba.r + ", " + item.colors[0].rgba.g + ", " + item.colors[0].rgba.b + ", " + item.colors[0].rgba.a + ")");
-            gradient.addColorStop(item.color_offsets[1]/100, "rgba(" + item.colors[1].rgba.r + ", " + item.colors[1].rgba.g + ", " + item.colors[1].rgba.b + ", " + item.colors[1].rgba.a + ")");
-            gradient_albedo.addColorStop(item.color_offsets[0]/100, "rgba(" + item.colors[0].rgba.r + ", " + item.colors[0].rgba.g + ", " + item.colors[0].rgba.b + ", " + item.colors[0].rgba.a + ")");
-            gradient_albedo.addColorStop(item.color_offsets[1]/100, "rgba(" + item.colors[1].rgba.r + ", " + item.colors[1].rgba.g + ", " + item.colors[1].rgba.b + ", " + item.colors[1].rgba.a + ")");
-            gradient_emission.addColorStop(item.color_offsets[0]/100, "rgba(" + item.colors[0].rgba.r + ", " + item.colors[0].rgba.g + ", " + item.colors[0].rgba.b + ", " + item.colors[0].rgba.a + ")");
-            gradient_emission.addColorStop(item.color_offsets[1]/100, "rgba(" + item.colors[1].rgba.r + ", " + item.colors[1].rgba.g + ", " + item.colors[1].rgba.b + ", " + item.colors[1].rgba.a + ")");*/
         } else {
           for (let line_index = 0; line_index < 10; line_index++) {
             const color = LinearColorInterpolator.findColorBetween(

@@ -1,6 +1,7 @@
 import {
   collectItemFolderPaths,
   computeItemBounds,
+  computeFolderBounds,
   getMapValueById,
   gradientDescriptor,
   idKey,
@@ -20,7 +21,8 @@ export const ITEM_DETAIL_FIELDS = new Set([
   'transform',
   'visibility',
 ]);
-const MAX_OVERVIEW_ITEMS = 1200;
+const MAX_OVERVIEW_FOLDERS = 300;
+const MAX_OVERVIEW_ITEMS = 400;
 const MAX_DATA_REQUESTS = 4;
 const MAX_ITEMS_PER_REQUEST = 100;
 const MAX_ITEMS_PER_WORKFLOW = 200;
@@ -112,6 +114,7 @@ function collectLayerIndex(nodes, currentPath = '', parentId = null, result = []
     const path = currentPath ? `${currentPath}/${name}` : name;
     result.push({
       id: node.id,
+      node,
       name,
       path,
       parentPath: currentPath,
@@ -172,48 +175,42 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
       folderItemCounts.set(path, (folderItemCounts.get(path) || 0) + 1);
     });
   });
-  const folders = folderIndex.map((folder) => ({
-    ...folder,
+  const folders = folderIndex.slice(0, MAX_OVERVIEW_FOLDERS).map((folder) => ({
+    id: folder.id,
+    path: folder.path,
+    parentId: folder.parentId,
+    index: folder.index,
     itemCount: folderItemCounts.get(folder.path) || 0,
-    children: layerIndex
-      .filter((entry) => idKey(entry.parentId) === idKey(folder.id))
-      .map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        path: entry.path,
-        type: entry.type,
-      })),
+    bounds: computeFolderBounds(folder.node, textureItemById),
+    ...(folder.visible ? {} : { visible: false }),
+    ...(folder.collapsed ? { collapsed: true } : {}),
   }));
 
   const serializedItems = layerItemIndex.slice(0, MAX_OVERVIEW_ITEMS).map((layerItem) => {
     const item = textureItemById.get(idKey(layerItem.id));
     return {
       id: layerItem.id,
-      name: layerItem.name,
       path: layerItem.path,
-      parentPath: layerItem.parentPath,
       parentId: layerItem.parentId,
       index: layerItem.index,
-      type: item?.type || null,
-      visible: item ? item.visible !== false : layerItem.visible,
+      itemType: item?.type || null,
+      ...((item ? item.visible !== false : layerItem.visible) ? {} : { visible: false }),
     };
   });
   const remainingSlots = Math.max(0, MAX_OVERVIEW_ITEMS - serializedItems.length);
   const orphanItemPayloads = items.filter((item) => !layerItemIds.has(idKey(item.id)));
   const orphanItems = orphanItemPayloads.slice(0, remainingSlots).map((item) => ({
     id: item.id,
-    name: String(item.name || '').trim(),
     path: String(item.name || '').trim(),
-    parentPath: '',
     parentId: null,
     index: null,
-    type: item.type || null,
-    visible: item.visible !== false,
+    itemType: item.type || null,
+    ...(item.visible !== false ? {} : { visible: false }),
     orphaned: true,
   }));
 
   return {
-    protocol: 'pigmi-editor-tools/3',
+    protocol: 'pigmi-editor-tools/4',
     document: {
       width: toNumber(texture?.width, 0),
       height: toNumber(texture?.height, 0),
@@ -253,28 +250,20 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
       rootIds: layerIndex.filter((entry) => entry.parentId === null).map((entry) => entry.id),
       valid: hierarchyIssues.length === 0,
       issues: hierarchyIssues,
-      truncated: layerItemIndex.length + orphanItemPayloads.length > MAX_OVERVIEW_ITEMS,
+      truncated:
+        folderIndex.length > MAX_OVERVIEW_FOLDERS ||
+        layerItemIndex.length + orphanItemPayloads.length > MAX_OVERVIEW_ITEMS,
+      omitted: {
+        folders: Math.max(0, folderIndex.length - folders.length),
+        items: Math.max(
+          0,
+          layerItemIndex.length +
+            orphanItemPayloads.length -
+            serializedItems.length -
+            orphanItems.length,
+        ),
+      },
     },
-    writeOperations: [
-      'create_folder',
-      'duplicate_folder',
-      'rename_folder',
-      'delete_folder',
-      'create_gradient_item',
-      'create_gradient_items',
-      'duplicate_item',
-      'edit_items',
-      'recolor_item',
-      'update_item',
-      'move_item',
-      'rename_item',
-      'delete_item',
-      'set_visibility',
-      'set_folder_state',
-      'set_selection',
-      'move_layer',
-      'update_texture',
-    ],
   };
 }
 
@@ -444,7 +433,6 @@ export function fulfillEditorDataRequests({ texture, selectionIds, requests: raw
         allowAll: true,
       });
       return {
-        request,
         matchedCount: paletteItems.length,
         palette: buildPaletteInventory(paletteItems, request.limit),
       };
@@ -461,7 +449,6 @@ export function fulfillEditorDataRequests({ texture, selectionIds, requests: raw
     const requestedFields = new Set(request.fields);
 
     return {
-      request,
       matchedCount: matchedItems.length,
       items: matchedItems.map((item) => serializeItemDetails(item, itemFolderMap, requestedFields)),
     };

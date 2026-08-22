@@ -1,5 +1,6 @@
 import {
   collectItemFolderPaths,
+  computeFolderBounds,
   computeItemBounds,
   idKey,
   normalizePathLike,
@@ -29,7 +30,7 @@ function findFolderByPath(nodes, wantedPath, currentPath = '') {
   return null;
 }
 
-export function buildFolderSnapshots({ texture, paths, fields = [] }) {
+export function buildFolderSnapshots({ texture, paths, fields = [], includeItemIndex = false }) {
   const items = Array.isArray(texture?.items) ? texture.items : [];
   const layers = Array.isArray(texture?.layers) ? texture.layers : [];
   const allRequestedPaths = [
@@ -69,7 +70,6 @@ export function buildFolderSnapshots({ texture, paths, fields = [] }) {
           id: node.id,
           name,
           kind: 'folder',
-          path,
           relativePath,
           children: (Array.isArray(node.childs) ? node.childs : [])
             .map((child) => visit(child, path))
@@ -91,7 +91,6 @@ export function buildFolderSnapshots({ texture, paths, fields = [] }) {
         name,
         kind: 'item',
         itemType: item?.type || null,
-        path,
         relativePath,
       };
       if (!item) {
@@ -99,14 +98,13 @@ export function buildFolderSnapshots({ texture, paths, fields = [] }) {
         return treeEntry;
       }
 
-      folderItems.push({
-        ...serializeItemDetails(item, itemFolderMap, requestedFields),
-        id: node.id,
-        name,
-        path,
-        folderPath: parentPath,
-        relativePath,
-      });
+      const details = serializeItemDetails(item, itemFolderMap, requestedFields);
+      delete details.name;
+      delete details.path;
+      delete details.folderPath;
+      if (requestedFields.size > 0 || includeItemIndex) {
+        folderItems.push({ ...details, id: node.id, relativePath });
+      }
       return treeEntry;
     };
 
@@ -116,6 +114,7 @@ export function buildFolderSnapshots({ texture, paths, fields = [] }) {
         id: found.node.id,
         name: String(found.node.name || '').trim(),
         path: found.path,
+        bounds: computeFolderBounds(found.node, itemById),
         complete: issues.length === 0 && !folderTruncated,
         issues,
         tree,
@@ -158,7 +157,7 @@ function flattenFolderTree(node, entries = []) {
 }
 
 export function compareFolderSnapshots({ texture, paths, fields = [] }) {
-  const snapshot = buildFolderSnapshots({ texture, paths, fields });
+  const snapshot = buildFolderSnapshots({ texture, paths, fields, includeItemIndex: true });
   const roles = new Map();
   const structureRoles = new Map();
 
@@ -212,6 +211,7 @@ export function compareFolderSnapshots({ texture, paths, fields = [] }) {
       snapshot.missingPaths.length === 0 &&
       snapshot.folders.every((folder) => folder.complete) &&
       structure.every((entry) => entry.missingIn.length === 0),
+    placements: snapshot.folders.map((folder) => ({ path: folder.path, bounds: folder.bounds })),
     structure,
     roles: comparisons,
     missingPaths: snapshot.missingPaths,

@@ -44,13 +44,15 @@ export default {
       is_pressed: false,
       is_moving: false,
       is_color_changing: false,
-      button: false,
       search: '',
+      // This legacy UI uses `false` to mean that no texture item is selected.
       selected: false,
       ls: null,
       is_syncing_layers: false,
       save_timer: false,
       current_tab: 'texture',
+
+      // Sidebar and split-view layout state.
       isItemSearchSplitVisible: false,
       itemSearchSplitRatio: 50,
       isItemSearchResizing: false,
@@ -80,32 +82,19 @@ export default {
       drag: false,
       current_color_offset_first_change: false,
       current_color_offset: -1,
+
+      // Canvas selection and drag state.
       drag_start_mouse: null,
       drag_start_positions: null,
-      drag_hit_index: null,
       drag_moved: false,
-      drag_pending_single: false,
       selection_drag_toggled: null,
       selection_drag_active: false,
       selection_drag_mode: null,
       selection_drag_anchor: null,
-      drag_anchor_offset: null,
       disposeMcpRequest: null,
       disposeMcpStatus: null,
-      sort_test: [
-        {
-          id: 1,
-          name: '123',
-        },
-        {
-          id: 2,
-          name: '1234',
-        },
-        {
-          id: 3,
-          name: '1235',
-        },
-      ],
+
+      // This object is serialized to project files. Its snake_case keys are intentional.
       texture: {
         step: 64,
         width: 2048,
@@ -185,14 +174,6 @@ export default {
     finalZoom() {
       return this.texture.zoom / 100 + 1;
     },
-    dragOptions() {
-      return {
-        animation: 250,
-        group: 'people',
-        disabled: false,
-        ghostClass: 'ghost',
-      };
-    },
     codexMcpCommand() {
       return createCodexMcpCommand({
         connectionFile: this.mcp.connectionFile,
@@ -226,21 +207,19 @@ export default {
           : {}),
       };
     },
-    // координаты центра (вычисляются на лету)
+    // Centered coordinates are derived from the current container and canvas sizes.
     centerLeft() {
-      const c = this.$refs.canvasContainer;
-      const cw = c ? c.clientWidth : 0;
-      return Math.round((cw - this.canvasRenderedWidth) / 2);
+      const container = this.$refs.canvasContainer;
+      const containerWidth = container?.clientWidth ?? 0;
+      return Math.round((containerWidth - this.canvasRenderedWidth) / 2);
     },
     centerTop() {
-      const c = this.$refs.canvasContainer;
-      const ch = c ? c.clientHeight : 0;
-      return Math.round((ch - this.canvasRenderedHeight) / 2);
+      const container = this.$refs.canvasContainer;
+      const containerHeight = container?.clientHeight ?? 0;
+      return Math.round((containerHeight - this.canvasRenderedHeight) / 2);
     },
-    // стиль canvas в зависимости от режима
     canvasStyle() {
       if (this.texture.center_locked) {
-        // позиционируем простым способом: relative + margin:auto
         return {
           position: 'relative',
           margin: 'auto',
@@ -250,17 +229,16 @@ export default {
           userSelect: 'none',
           touchAction: 'none',
         };
-      } else {
-        // свободное позиционирование через left/top
-        return {
-          position: 'absolute',
-          left: `${this.canvasPos.left}px`,
-          top: `${this.canvasPos.top}px`,
-          cursor: this.isPanning ? 'grabbing' : 'pointer',
-          userSelect: 'none',
-          touchAction: 'none',
-        };
       }
+
+      return {
+        position: 'absolute',
+        left: `${this.canvasPos.left}px`,
+        top: `${this.canvasPos.top}px`,
+        cursor: this.isPanning ? 'grabbing' : 'pointer',
+        userSelect: 'none',
+        touchAction: 'none',
+      };
     },
   },
   watch: {
@@ -273,13 +251,11 @@ export default {
             return;
           }
           this.lastItem = JSON.parse(JSON.stringify(currentItem));
-          if (
-            (this.texture.items[this.selected].type === 'g' &&
-              this.texture.items[this.selected].colors.length === 0) ||
-            (this.texture.items[this.selected].type === 'sg' &&
-              this.texture.items[this.selected].color_mode !== 'black_to_white' &&
-              this.texture.items[this.selected].colors.length === 0)
-          ) {
+          const needsColor =
+            currentItem.colors.length === 0 &&
+            (currentItem.type === 'g' ||
+              (currentItem.type === 'sg' && currentItem.color_mode !== 'black_to_white'));
+          if (needsColor) {
             this.addColor();
           }
         }
@@ -287,29 +263,29 @@ export default {
       },
       deep: true,
     },
-    selected(new_value, old_value) {
+    selected(newValue, oldValue) {
       const fromLayers = this.is_syncing_layers;
       this.is_syncing_layers = false;
-      if (new_value === false && this.isItemSearchSplitVisible) {
+      if (newValue === false && this.isItemSearchSplitVisible) {
         this.isItemSearchSplitVisible = false;
         this.current_tab = 'search';
         this.lastItemSearchState = 'split';
       }
-      if (new_value !== false) {
+      if (newValue !== false) {
         this.showItemPanelAfterSelection();
       }
       this.$nextTick(() => {
-        if (new_value !== old_value) {
+        if (newValue !== oldValue) {
           for (let i = this.texture.items.length - 1; i >= 0; i--) {
             this.texture.items[i].selected = false;
           }
-          if (this.texture.items[new_value]) {
-            this.texture.items[new_value].selected = true;
+          if (this.texture.items[newValue]) {
+            this.texture.items[newValue].selected = true;
           }
         }
 
         if (this.ls && !fromLayers) {
-          const item = this.texture.items[new_value];
+          const item = this.texture.items[newValue];
           if (item && item.id !== undefined) {
             applyLayerSelection(this.ls, [item.id], 'item');
           } else {
@@ -318,8 +294,8 @@ export default {
         }
       });
     },
-    current_tab(new_value) {
-      if (this.isItemSearchSplitVisible && new_value !== 'item' && new_value !== 'search') {
+    current_tab(newTab) {
+      if (this.isItemSearchSplitVisible && newTab !== 'item' && newTab !== 'search') {
         this.isItemSearchSplitVisible = false;
       }
     },
@@ -356,10 +332,10 @@ export default {
       }
     },
     'ls.selected': {
-      handler(new_value) {
+      handler(newSelection) {
         if (!this.ls) return;
         if (this.ls.active_type === 'folder') return;
-        const ids = Array.isArray(new_value) ? new_value : [];
+        const ids = Array.isArray(newSelection) ? newSelection : [];
 
         if (ids.length === 0) {
           if (this.selected !== false) {
@@ -421,8 +397,8 @@ export default {
     folder_path() {
       this.sync = false;
     },
-    selected_file(new_value, old_value) {
-      if (new_value != old_value) {
+    selected_file(newValue, oldValue) {
+      if (newValue !== oldValue) {
         this.sync = false;
       }
     },

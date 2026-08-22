@@ -72,49 +72,42 @@ describe('selective editor context', () => {
       lastItem: null,
     });
 
-    expect(overview.protocol).toBe('pigmi-editor-tools/3');
+    expect(overview.protocol).toBe('pigmi-editor-tools/4');
     expect(overview.selection).toEqual({ activeId: 102, ids: [102] });
     expect(overview.hierarchy.folders).toEqual([
       {
         id: 1,
-        name: 'Vehicle',
         path: 'Vehicle',
-        parentPath: '',
         parentId: null,
         index: 0,
-        type: 'folder',
-        visible: true,
-        collapsed: false,
         itemCount: 2,
-        children: [
-          { id: 101, name: 'Body', path: 'Vehicle/Body', type: 'item' },
-          { id: 102, name: 'Glass', path: 'Vehicle/Glass', type: 'item' },
-        ],
+        bounds: { x: 0, y: 32, width: 96, height: 32 },
       },
     ]);
     expect(overview.hierarchy.items).toEqual([
       {
         id: 101,
-        name: 'Body',
         path: 'Vehicle/Body',
-        parentPath: 'Vehicle',
         parentId: 1,
         index: 0,
-        type: 'g',
-        visible: true,
+        itemType: 'g',
       },
       {
         id: 102,
-        name: 'Glass',
         path: 'Vehicle/Glass',
-        parentPath: 'Vehicle',
         parentId: 1,
         index: 1,
-        type: 'g',
-        visible: true,
+        itemType: 'g',
       },
     ]);
-    expect(overview.hierarchy).toMatchObject({ rootIds: [1], valid: true, issues: [] });
+    expect(overview.hierarchy).toMatchObject({
+      rootIds: [1],
+      valid: true,
+      issues: [],
+      omitted: { folders: 0, items: 0 },
+    });
+    expect(overview).not.toHaveProperty('writeOperations');
+    expect(overview.hierarchy.folders[0]).not.toHaveProperty('children');
     expect(overview.hierarchy.items[0]).not.toHaveProperty('colors');
     expect(overview.hierarchy.items[0]).not.toHaveProperty('material');
     expect(overview.hierarchy.items[0]).not.toHaveProperty('transform');
@@ -139,7 +132,7 @@ describe('selective editor context', () => {
     });
 
     expect(overview.hierarchy.valid).toBe(true);
-    expect(overview.hierarchy.items.map((item) => item.parentPath)).toEqual(['Vehicle', 'Vehicle']);
+    expect(overview.hierarchy.items.map((item) => item.parentId)).toEqual(['1', '1']);
     expect(context.results[0].items.map((item) => item.path)).toEqual([
       'Vehicle/Body',
       'Vehicle/Glass',
@@ -181,6 +174,7 @@ describe('selective editor context', () => {
     expect(result.missingPaths).toEqual([]);
     expect(result.folders[0]).toMatchObject({
       path: 'Garage/Car 1',
+      bounds: { x: 0, y: 32, width: 96, height: 32 },
       complete: true,
       tree: {
         relativePath: '',
@@ -202,6 +196,26 @@ describe('selective editor context', () => {
       colors: ['#0064c8'],
       colorStops: [{ opacity: 35 }],
       material: { roughness: 5 },
+    });
+  });
+
+  it('returns only tree and bounds when no folder detail fields are requested', () => {
+    const result = buildFolderSnapshots({
+      texture: makeTexture(),
+      paths: ['Vehicle'],
+      fields: [],
+    });
+
+    expect(result.folders[0]).toMatchObject({
+      path: 'Vehicle',
+      bounds: { x: 0, y: 32, width: 96, height: 32 },
+      items: [],
+      tree: {
+        children: [
+          { kind: 'item', relativePath: 'Body' },
+          { kind: 'item', relativePath: 'Glass' },
+        ],
+      },
     });
   });
 
@@ -238,6 +252,10 @@ describe('selective editor context', () => {
     });
 
     expect(comparison.structurallyEquivalent).toBe(true);
+    expect(comparison.placements).toEqual([
+      { path: 'Car 1', bounds: { x: 0, y: 32, width: 96, height: 32 } },
+      { path: 'Car 2', bounds: { x: 0, y: 32, width: 96, height: 32 } },
+    ]);
     expect(comparison.roles.map((role) => role.relativePath)).toEqual(['Body', 'Glass']);
     expect(comparison.roles.find((role) => role.relativePath === 'Body')).toMatchObject({
       missingIn: [],
@@ -245,6 +263,49 @@ describe('selective editor context', () => {
       values: [{ folderPath: 'Car 1' }, { folderPath: 'Car 2' }],
     });
     expect(comparison.roles.find((role) => role.relativePath === 'Glass').sameValues).toBe(true);
+  });
+
+  it('exposes names and geometry as raw evidence for a vertical local pattern', () => {
+    const texture = makeTexture();
+    texture.items.push(
+      { ...structuredClone(texture.items[0]), id: 201, y: 160 },
+      { ...structuredClone(texture.items[1]), id: 202, y: 160 },
+    );
+    texture.layers = [
+      { id: 1, name: 'Вариант-01', type: 'folder', childs: texture.layers[0].childs },
+      {
+        id: 2,
+        name: 'Вариант-02',
+        type: 'folder',
+        childs: [
+          { id: 201, name: 'Body', type: 'item', childs: [] },
+          { id: 202, name: 'Glass', type: 'item', childs: [] },
+        ],
+      },
+    ];
+
+    const overview = buildEditorOverview({
+      texture,
+      selectionIds: [],
+      activeId: null,
+      lastItem: null,
+    });
+    const comparison = compareFolderSnapshots({
+      texture,
+      paths: ['Вариант-01', 'Вариант-02'],
+      fields: [],
+    });
+
+    expect(overview.hierarchy.folders.map((folder) => folder.path)).toEqual([
+      'Вариант-01',
+      'Вариант-02',
+    ]);
+    expect(comparison.placements).toEqual([
+      { path: 'Вариант-01', bounds: { x: 0, y: 32, width: 96, height: 32 } },
+      { path: 'Вариант-02', bounds: { x: 0, y: 160, width: 96, height: 32 } },
+    ]);
+    expect(comparison).not.toHaveProperty('flowDirection');
+    expect(comparison).not.toHaveProperty('nextName');
   });
 
   it('detects folder-only structural differences between variants', () => {
@@ -292,6 +353,7 @@ describe('selective editor context', () => {
     });
 
     expect(context.results[0].matchedCount).toBe(1);
+    expect(context.results[0]).not.toHaveProperty('request');
     expect(context.results[0].items[0]).toMatchObject({
       id: 102,
       path: 'Vehicle/Glass',

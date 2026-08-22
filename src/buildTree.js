@@ -39,14 +39,12 @@ export function previewCssFromItem(item) {
       })
       .join(', ');
   }
-  //console.log(item)
   if (item.type === 'g') {
     if (item.shape === 'l') {
       if (item.direction === 'vertical') {
         return `linear-gradient(180deg, ${cssStops})`;
-      } else {
-        return `linear-gradient(90deg, ${cssStops})`;
       }
+      return `linear-gradient(90deg, ${cssStops})`;
     }
     if (item.shape === 'r') {
       return `radial-gradient(${cssStops})`;
@@ -58,113 +56,96 @@ export function previewCssFromItem(item) {
   if (item.type === 'sg') {
     if (item.color_mode === 'black_to_white') {
       return rgbaToCss(item.colors[0].rgba);
-    } else {
-      if (item.direction === 'vertical') {
-        return `linear-gradient(180deg, ${cssStops})`;
-      } else {
-        return `linear-gradient(90deg, ${cssStops})`;
-      }
     }
+    if (item.direction === 'vertical') {
+      return `linear-gradient(180deg, ${cssStops})`;
+    }
+    return `linear-gradient(90deg, ${cssStops})`;
   }
 }
 
 /**
- * buildTree(items)
- * - не сливает одинаковые items (каждый лист — отдельный объект с itemIndex)
- * - создает group-узлы только для сегментов до последнего
- * - последний сегмент всегда лист (isItem: true)
+ * Converts slash-separated item names into the tree used by the search panel.
+ * Duplicate items remain separate leaves, and only path segments become groups.
  */
 export function buildTree(items = []) {
   const roots = [];
-  const rootMap = new Map(); // для быстрого поиска групп на корне
+  const rootGroups = new Map();
 
   function createGroupNode(label, key, path) {
     return {
-      label, // отображаемое имя
-      _key: key, // нормализованный ключ для поиска
-      path, // полный путь до этого group-узла
-      children: [], // сюда попадут либо дальнейшие group-узлы, либо листы (isItem)
+      label,
+      _key: key,
+      path,
+      children: [],
       _childrenMap: new Map(),
-      _id: path, // ключ для v-for (уникален для групп)
+      _id: path,
     };
   }
 
-  items.forEach((it, idx) => {
-    if (!it || typeof it.name !== 'string') return;
+  items.forEach((item, itemIndex) => {
+    if (!item || typeof item.name !== 'string') return;
 
-    const parts = it.name
+    const pathParts = item.name
       .split('/')
-      .map((p) => p.trim())
-      .filter((p) => p.length > 0);
+      .map((part) => part.trim())
+      .filter(Boolean);
 
-    if (parts.length === 0) return;
+    if (pathParts.length === 0) return;
 
-    // PREVIEW CSS заранее
-    const previewCss = previewCssFromItem(it);
+    const previewCss = previewCssFromItem(item);
 
-    // если только один сегмент -> лист на корне
-    if (parts.length === 1) {
-      const leaf = {
-        label: parts[0],
-        path: parts[0],
+    if (pathParts.length === 1) {
+      roots.push({
+        label: pathParts[0],
+        path: pathParts[0],
         isItem: true,
-        itemIndex: idx,
+        itemIndex,
         previewCss,
-        _id: `item-${idx}`,
-      };
-      roots.push(leaf);
+        _id: `item-${itemIndex}`,
+      });
       return;
     }
 
-    // иначе: создаём (или находим) group-узлы для всех сегментов, кроме последнего
-    let parentList = roots;
-    let parentMap = rootMap;
-    const acc = [];
+    let siblingNodes = roots;
+    let siblingGroups = rootGroups;
+    const currentPath = [];
 
-    for (let i = 0; i < parts.length - 1; i++) {
-      const part = parts[i];
+    for (const part of pathParts.slice(0, -1)) {
       const key = part.toLowerCase();
-      acc.push(part);
-      const path = acc.join('/');
+      currentPath.push(part);
+      const path = currentPath.join('/');
 
-      let node = parentMap.get(key);
+      let node = siblingGroups.get(key);
       if (!node) {
         node = createGroupNode(part, key, path);
-        parentList.push(node);
-        parentMap.set(key, node);
-      } else {
-        if (!node.path) node.path = path;
-        if (!node._id) node._id = path;
+        siblingNodes.push(node);
+        siblingGroups.set(key, node);
       }
 
-      // descend
-      parentList = node.children;
-      parentMap = node._childrenMap;
+      siblingNodes = node.children;
+      siblingGroups = node._childrenMap;
     }
 
-    // parentList сейчас — children у последнего group-узла (или roots если не было)
-    const lastPart = parts[parts.length - 1];
-    const fullPath = parts.join('/');
-
-    const leaf = {
-      label: lastPart,
-      path: fullPath,
+    siblingNodes.push({
+      label: pathParts[pathParts.length - 1],
+      path: pathParts.join('/'),
       isItem: true,
-      itemIndex: idx,
+      itemIndex,
       previewCss,
-      _id: `item-${idx}`,
-    };
-
-    parentList.push(leaf);
+      _id: `item-${itemIndex}`,
+    });
   });
 
-  // удаляем вспомогательные карты перед возвратом
-  (function stripMaps(nodes) {
-    for (const n of nodes) {
-      if (n._childrenMap) delete n._childrenMap;
-      if (n.children && n.children.length) stripMaps(n.children);
+  function removeLookupMaps(nodes) {
+    for (const node of nodes) {
+      delete node._childrenMap;
+      if (node.children?.length) {
+        removeLookupMaps(node.children);
+      }
     }
-  })(roots);
+  }
 
+  removeLookupMaps(roots);
   return roots;
 }

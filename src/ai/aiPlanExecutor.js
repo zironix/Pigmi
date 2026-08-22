@@ -438,6 +438,10 @@ export function applyAiPlan({
     }
 
     if (op.type === 'create_gradient_item') {
+      if (!normalizeGeneratedItemName(op.name)) {
+        warnings.push(`op#${index + 1}: create_gradient_item name is required`);
+        return;
+      }
       if (op.folderPath) {
         ensureFolderPath({
           layers,
@@ -484,6 +488,10 @@ export function applyAiPlan({
           return;
         }
         const mergedOp = mergeOperationDefaults(defaults, itemConfig);
+        if (!normalizeGeneratedItemName(mergedOp.name)) {
+          warnings.push(`op#${index + 1}.${itemIndex + 1}: item name is required`);
+          return;
+        }
         if (mergedOp.folderPath) {
           ensureFolderPath({
             layers,
@@ -520,12 +528,15 @@ export function applyAiPlan({
 
     if (op.type === 'duplicate_item') {
       const targetConfig = op.target && typeof op.target === 'object' ? { ...op.target } : {};
-      if (!targetConfig.folderPath && typeof op.folderPath === 'string') {
-        targetConfig.folderPath = op.folderPath;
-      }
       const targetItems = resolveTargetItems(texture, selectionIds, targetConfig, layers);
       if (!targetItems.length) {
         warnings.push(`op#${index + 1}: duplicate target not found`);
+        return;
+      }
+      const hasExplicitName = normalizeGeneratedItemName(op.newName).length > 0;
+      const hasDestinationFolder = typeof op.folderPath === 'string' && op.folderPath.trim();
+      if (!hasExplicitName && !hasDestinationFolder) {
+        warnings.push(`op#${index + 1}: duplicate_item newName is required in the same folder`);
         return;
       }
       const step = toNumber(texture.step, 1) || 1;
@@ -540,7 +551,7 @@ export function applyAiPlan({
           cloned.name =
             targetItems.length > 1 ? `${op.newName.trim()} ${sourceIndex + 1}` : op.newName.trim();
         } else {
-          cloned.name = `${source.name || 'Item'} copy`;
+          cloned.name = source.name;
         }
         cloned.name = normalizeGeneratedItemName(cloned.name, op.folderPath);
         const offsetX = toNumber(op?.offset?.x, 0);

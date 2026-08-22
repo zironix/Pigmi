@@ -218,7 +218,6 @@ function onDragLeave(event: DragEvent) {
   }
 }
 function onDrop($event) {
-  //console.log(ls.dragged_item, ls.hovered_item, ls.zone)
   const dropZone = resolveDropZoneForDrop($event);
   props.moveItem(ls.dragged_item.id, ls.hovered_item.id, dropZone);
   ls.zone = null;

@@ -1,10 +1,21 @@
 import { applyLayerSelection } from '../../stores/layers';
+import {
+  findTopmostCanvasItemIndex,
+  getCanvasItemCellOffset,
+  isPointInsideCanvasItem,
+} from '../../utils/canvasItemGeometry';
 import { isPlatformPrimaryModifier } from '../../utils/inputModifiers';
 import {
   calculateAnchoredCanvasPosition,
   classifyWheelInput,
   WHEEL_GESTURE_IDLE_MS,
 } from '../../utils/wheelInput';
+
+const PRIMARY_MOUSE_BUTTON = 0;
+const MIDDLE_MOUSE_BUTTON = 1;
+const SECONDARY_MOUSE_BUTTON = 2;
+const MIN_TEXTURE_ZOOM = -99;
+const MAX_TEXTURE_ZOOM = 10000;
 
 export const canvasInteractionMethods = {
   isToggleSelectionPressed(event) {
@@ -17,11 +28,9 @@ export const canvasInteractionMethods = {
   mousedown(event) {
     const isToggleSelection = this.isToggleSelectionPressed(event);
 
-    if (event.button === 0) {
+    if (event.button === PRIMARY_MOUSE_BUTTON) {
       this.is_pressed = true;
-      this.drag_hit_index = null;
       this.drag_moved = false;
-      this.drag_pending_single = false;
       this.selection_drag_toggled = new Set();
       this.selection_drag_active = false;
       this.selection_drag_mode = null;
@@ -64,26 +73,8 @@ export const canvasInteractionMethods = {
         }
       });
       this.drag_start_positions = positions;
-      if (selectedSet.size > 1) {
-        const activeId =
-          this.ls && this.ls.active_id !== null && this.ls.active_id !== undefined
-            ? this.ls.active_id
-            : selectedSet.size
-              ? Array.from(selectedSet)[0]
-              : null;
-        if (activeId && positions[activeId]) {
-          this.drag_anchor_offset = {
-            x: this.drag_start_mouse.x - positions[activeId].x,
-            y: this.drag_start_mouse.y - positions[activeId].y,
-          };
-        } else {
-          this.drag_anchor_offset = { x: 0, y: 0 };
-        }
-      } else {
-        this.drag_anchor_offset = null;
-      }
     }
-    if (event.button === 2) {
+    if (event.button === SECONDARY_MOUSE_BUTTON) {
       const idx = this.select(event, false);
       if (idx !== null && idx !== undefined && idx !== false) {
         this.remove(idx);
@@ -99,12 +90,10 @@ export const canvasInteractionMethods = {
       this.draw();
     }
 
-    //middle
-    if (event.button === 1) {
+    if (event.button === MIDDLE_MOUSE_BUTTON) {
       event.preventDefault();
       this.unlockCanvasForPan();
 
-      // начинаем панинг
       this.isPanning = true;
       this.panInput = 'mouse';
       this.panStartMouse.x = event.clientX;
@@ -112,7 +101,7 @@ export const canvasInteractionMethods = {
       this.panStartPos.left = this.canvasPos.left;
       this.panStartPos.top = this.canvasPos.top;
 
-      // слушаем глобально, чтобы не терять движение, если курсор уйдёт
+      // Global listeners keep panning active when the pointer leaves the canvas.
       window.addEventListener('mousemove', this.onPanMove, { passive: false });
       window.addEventListener('mouseup', this.onPanEnd, { passive: false });
       document.body.style.cursor = 'grabbing';
@@ -122,28 +111,22 @@ export const canvasInteractionMethods = {
     const container = this.$refs.canvasContainer;
     const canvas = this.$refs.texture;
 
-    // Если переключаемся ОТ режима centerLocked === true -> в false,
-    // нужно сохранить текущую визуальную позицию в canvasPos, чтобы не было "прыжка".
+    // Preserve the current screen position when switching to free positioning.
     if (this.texture.center_locked) {
       if (container && canvas) {
         const canvasRect = canvas.getBoundingClientRect();
         const containerRect = container.getBoundingClientRect();
 
-        // переводим экранную позицию в координаты внутри "контента" контейнера
         const left = Math.round(canvasRect.left - containerRect.left + container.scrollLeft);
         const top = Math.round(canvasRect.top - containerRect.top + container.scrollTop);
 
         this.canvasPos.left = left;
         this.canvasPos.top = top;
-      } else {
-        // refs ещё нет — можно оставить canvasPos как есть
       }
 
-      // выключаем центрирование — теперь используем canvasPos для absolute-позиционирования
       this.texture.center_locked = false;
     } else {
-      // включаем центрирование — CSS (flex + margin:auto) его отцентрует
-      // не трогаем canvasPos (можно оставить прошлую позицию, если понадобится)
+      // CSS centers the canvas; keep canvasPos for the next free-positioning session.
       this.texture.center_locked = true;
     }
   },
@@ -184,7 +167,7 @@ export const canvasInteractionMethods = {
   },
   mouseup(event) {
     if (this.is_pressed && !this.drag_moved && !this.selection_drag_active) {
-      if (event.button === 0) {
+      if (event.button === PRIMARY_MOUSE_BUTTON) {
         if (this.isToggleSelectionPressed(event)) {
           this.select(event, false, true, 'add');
         } else {
@@ -196,9 +179,7 @@ export const canvasInteractionMethods = {
     if (this.is_moving) {
       this.is_moving = false;
     }
-    this.drag_hit_index = null;
     this.drag_moved = false;
-    this.drag_pending_single = false;
     this.selection_drag_toggled = null;
     this.selection_drag_active = false;
     this.selection_drag_mode = null;
@@ -429,19 +410,15 @@ export const canvasInteractionMethods = {
     const canvasRect = canvas.getBoundingClientRect();
     const containerRect = container.getBoundingClientRect();
 
-    // Рассчитываем адаптивный шаг зума на основе размера текстуры
-    const textureSize = Math.max(this.texture.width, this.texture.height); // или Math.sqrt(this.texture.width ** 2 + this.texture.height ** 2)
-    const baseZoomStep = this.texture.zoom_speed || 1; // Базовый шаг зума
-    // Адаптивный шаг: для маленьких текстур увеличиваем шаг, для больших — уменьшаем
-    const adaptiveZoomStep = baseZoomStep * (100 / textureSize); // Нормируем относительно, например, 100 пикселей
+    // Smaller textures need a larger zoom step to feel responsive.
+    const textureSize = Math.max(this.texture.width, this.texture.height);
+    const baseZoomStep = this.texture.zoom_speed || 1;
+    const adaptiveZoomStep = baseZoomStep * (100 / textureSize);
     const step = event.deltaY < 0 ? adaptiveZoomStep : -adaptiveZoomStep;
 
-    // Ограничиваем texture.zoom в разумных пределах
-    const minTextureZoom = -99; // Минимальный зум (например, finalZoom = -99/100 + 1 = 0.01)
-    const maxTextureZoom = 10000; // Максимальный зум (например, finalZoom = 1000/100 + 1 = 11)
     this.texture.zoom = Math.max(
-      minTextureZoom,
-      Math.min(maxTextureZoom, (this.texture.zoom + step).toFixed(3)),
+      MIN_TEXTURE_ZOOM,
+      Math.min(MAX_TEXTURE_ZOOM, (this.texture.zoom + step).toFixed(3)),
     );
 
     const nextPosition = calculateAnchoredCanvasPosition({
@@ -469,127 +446,40 @@ export const canvasInteractionMethods = {
         this.texture.items[i].selected = false;
       }
     }
-    for (let i = this.texture.items.length - 1; i >= 0; i--) {
-      if (this.texture.items[i].visible === false) {
+    const pointX = event.offsetX / this.finalZoom;
+    const pointY = event.offsetY / this.finalZoom;
+
+    for (let index = this.texture.items.length - 1; index >= 0; index--) {
+      const item = this.texture.items[index];
+      if (item.visible === false || !isPointInsideCanvasItem(item, pointX, pointY)) {
         continue;
       }
 
-      if (this.texture.items[i].type === 'sg') {
-        let x_steps = 1,
-          y_steps = 1;
+      const cellOffset = getCanvasItemCellOffset(item, pointX, pointY);
+      this.selected_offset.x = cellOffset.x;
+      this.selected_offset.y = cellOffset.y;
+      this.showItemPanelAfterSelection();
 
-        if (
-          this.texture.items[i].direction &&
-          this.texture.items[i].steps &&
-          this.texture.items[i].steps > 1
-        ) {
-          let m = this.texture.items[i].colors.length - 1;
-          let a_steps = 0;
-          if (!m) {
-            m = 1;
-          }
+      if (additive && this.ls) {
+        const selectedIds = Array.isArray(this.ls.selected) ? [...this.ls.selected] : [];
+        const selectedIndex = selectedIds.indexOf(item.id);
 
-          if (this.texture.items[i].color_mode === 'black_to_white') {
-            m = 1;
-            a_steps = this.texture.items[i].steps + 1;
-          }
-          if (this.texture.items[i].direction === 'horizontal') {
-            x_steps = this.texture.items[i].steps * m + a_steps;
-          } else {
-            y_steps = this.texture.items[i].steps * m + a_steps;
-          }
+        if (selectedIndex === -1) {
+          selectedIds.push(item.id);
+        } else if (additiveMode === 'toggle' && selectedIds.length > 1) {
+          selectedIds.splice(selectedIndex, 1);
+        } else if (additiveMode === 'add') {
+          selectedIds.splice(selectedIndex, 1);
+          selectedIds.push(item.id);
         }
-        if (
-          event.offsetX >= this.texture.items[i].x * this.finalZoom &&
-          event.offsetX <=
-            +this.texture.items[i].x * this.finalZoom +
-              this.texture.items[i].size * x_steps * this.finalZoom &&
-          event.offsetY >= this.texture.items[i].y * this.finalZoom &&
-          event.offsetY <=
-            +this.texture.items[i].y * this.finalZoom +
-              this.texture.items[i].size * y_steps * this.finalZoom
-        ) {
-          if (this.texture.items[i].direction === 'horizontal') {
-            const left = this.texture.items[i].x * this.finalZoom;
-            const relative_x = event.offsetX - left;
-            this.selected_offset.x =
-              Math.ceil(relative_x / (this.texture.items[i].size * this.finalZoom)) - 1;
-            this.selected_offset.y = 0;
-          } else {
-            const top = this.texture.items[i].y * this.finalZoom;
-            const relative_y = event.offsetY - top;
-            this.selected_offset.x = 0;
-            this.selected_offset.y =
-              Math.ceil(relative_y / (this.texture.items[i].size * this.finalZoom)) - 1;
-          }
-
-          //this.texture.items.push(...this.texture.items.splice(i, 1));
-          this.showItemPanelAfterSelection();
-          if (additive && this.ls) {
-            const ids = Array.isArray(this.ls.selected) ? [...this.ls.selected] : [];
-            const idx = ids.indexOf(this.texture.items[i].id);
-            if (idx === -1) {
-              ids.push(this.texture.items[i].id);
-            } else if (additiveMode === 'toggle' && ids.length > 1) {
-              ids.splice(idx, 1);
-            } else if (additiveMode === 'add') {
-              ids.splice(idx, 1);
-              ids.push(this.texture.items[i].id);
-            }
-            applyLayerSelection(this.ls, ids, 'item');
-          } else {
-            this.texture.items[i].selected = true;
-            if (this.ls) {
-              applyLayerSelection(this.ls, [this.texture.items[i].id], 'item');
-            }
-          }
-          return i;
-        }
+        applyLayerSelection(this.ls, selectedIds, 'item');
       } else {
-        if (
-          event.offsetX >= this.texture.items[i].x * this.finalZoom &&
-          event.offsetX <=
-            +this.texture.items[i].x * this.finalZoom +
-              this.texture.items[i].size[0] * this.finalZoom &&
-          event.offsetY >= this.texture.items[i].y * this.finalZoom &&
-          event.offsetY <=
-            +this.texture.items[i].y * this.finalZoom +
-              this.texture.items[i].size[1] * this.finalZoom
-        ) {
-          const left = this.texture.items[i].x * this.finalZoom;
-          const top = this.texture.items[i].y * this.finalZoom;
-
-          const relative_x = event.offsetX - left;
-          const relative_y = event.offsetY - top;
-
-          this.selected_offset.x =
-            Math.ceil(relative_x / (this.texture.items[i].size[0] * this.finalZoom)) - 1;
-          this.selected_offset.y =
-            Math.ceil(relative_y / (this.texture.items[i].size[1] * this.finalZoom)) - 1;
-
-          this.showItemPanelAfterSelection();
-
-          if (additive && this.ls) {
-            const ids = Array.isArray(this.ls.selected) ? [...this.ls.selected] : [];
-            const idx = ids.indexOf(this.texture.items[i].id);
-            if (idx === -1) {
-              ids.push(this.texture.items[i].id);
-            } else if (additiveMode === 'toggle' && ids.length > 1) {
-              ids.splice(idx, 1);
-            } else if (additiveMode === 'add') {
-              ids.splice(idx, 1);
-              ids.push(this.texture.items[i].id);
-            }
-            applyLayerSelection(this.ls, ids, 'item');
-          } else {
-            this.texture.items[i].selected = true;
-            if (this.ls) {
-              applyLayerSelection(this.ls, [this.texture.items[i].id], 'item');
-            }
-          }
-          return i;
+        item.selected = true;
+        if (this.ls) {
+          applyLayerSelection(this.ls, [item.id], 'item');
         }
       }
+      return index;
     }
     this.selecting = false;
     if (this.ls) {
@@ -617,57 +507,11 @@ export const canvasInteractionMethods = {
     return null;
   },
   getHitIndex(event) {
-    for (let i = this.texture.items.length - 1; i >= 0; i--) {
-      if (this.texture.items[i].visible === false) continue;
-      if (this.texture.items[i].type === 'sg') {
-        let x_steps = 1,
-          y_steps = 1;
-        if (
-          this.texture.items[i].direction &&
-          this.texture.items[i].steps &&
-          this.texture.items[i].steps > 1
-        ) {
-          let m = this.texture.items[i].colors.length - 1;
-          let a_steps = 0;
-          if (!m) m = 1;
-          if (this.texture.items[i].color_mode === 'black_to_white') {
-            m = 1;
-            a_steps = this.texture.items[i].steps + 1;
-          }
-          if (this.texture.items[i].direction === 'horizontal') {
-            x_steps = this.texture.items[i].steps * m + a_steps;
-          } else {
-            y_steps = this.texture.items[i].steps * m + a_steps;
-          }
-        }
-        if (
-          event.offsetX >= this.texture.items[i].x * this.finalZoom &&
-          event.offsetX <=
-            +this.texture.items[i].x * this.finalZoom +
-              this.texture.items[i].size * x_steps * this.finalZoom &&
-          event.offsetY >= this.texture.items[i].y * this.finalZoom &&
-          event.offsetY <=
-            +this.texture.items[i].y * this.finalZoom +
-              this.texture.items[i].size * y_steps * this.finalZoom
-        ) {
-          return i;
-        }
-      } else {
-        if (
-          event.offsetX >= this.texture.items[i].x * this.finalZoom &&
-          event.offsetX <=
-            +this.texture.items[i].x * this.finalZoom +
-              this.texture.items[i].size[0] * this.finalZoom &&
-          event.offsetY >= this.texture.items[i].y * this.finalZoom &&
-          event.offsetY <=
-            +this.texture.items[i].y * this.finalZoom +
-              this.texture.items[i].size[1] * this.finalZoom
-        ) {
-          return i;
-        }
-      }
-    }
-    return null;
+    return findTopmostCanvasItemIndex(
+      this.texture.items,
+      event.offsetX / this.finalZoom,
+      event.offsetY / this.finalZoom,
+    );
   },
   mouseLeave() {
     if (this.ls) {

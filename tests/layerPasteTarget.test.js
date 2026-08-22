@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { findLayerNodeById, resolveLayerPasteTarget } from '../src/utils/layerPasteTarget';
+import {
+  collectLayerItemIds,
+  collectLayerNodesByIds,
+  findLayerNodeById,
+  isLayerAncestor,
+  keepTopLevelLayerNodes,
+  resolveLayerPasteTarget,
+} from '../src/utils/layerPasteTarget';
 
 const tree = [
   {
@@ -54,5 +61,21 @@ describe('layer paste target', () => {
 
     expect(result).toMatchObject({ index: 0, parent: { id: 1 }, node: { id: 2 } });
     expect(result?.parentArray).toBe(tree[0].childs);
+  });
+
+  it('collects selected nodes in tree order', () => {
+    expect(collectLayerNodesByIds(tree, new Set([4, 1])).map((node) => node.id)).toEqual([1, 4]);
+  });
+
+  it('recognizes ancestors and removes duplicate subtree selections', () => {
+    const selectedNodes = collectLayerNodesByIds(tree, [1, 2, 4]);
+
+    expect(isLayerAncestor(tree[0], 2)).toBe(true);
+    expect(isLayerAncestor(tree[0], 4)).toBe(false);
+    expect(keepTopLevelLayerNodes(selectedNodes).map((node) => node.id)).toEqual([1, 4]);
+  });
+
+  it('collects every item id below a folder', () => {
+    expect(collectLayerItemIds(tree[0])).toEqual([2]);
   });
 });

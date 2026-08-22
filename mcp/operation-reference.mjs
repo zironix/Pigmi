@@ -56,7 +56,7 @@ export const OPERATION_REFERENCE = Object.freeze({
   duplicate_folder: {
     type: 'duplicate_folder',
     sourcePath: 'Folder',
-    newPath: 'Folder Copy',
+    newPath: 'Exact destination folder path following the local naming convention',
     offset: { x: 0, y: 64 },
     itemEdits: [
       {
@@ -71,7 +71,8 @@ export const OPERATION_REFERENCE = Object.freeze({
     notes: [
       'Duplicates the complete source hierarchy and preserves every item name, type, gradient, transform, and material unless itemEdits overrides it',
       'Use itemEdits to make a self-contained variant without knowing the generated item ids',
-      'relativePath is relative to sourcePath; for example Glass or Details/Trim',
+      'relativePath is relative to sourcePath; nested relative paths use slash separators',
+      'offset is relative to sourcePath for every operation; continue an observed series with successive multiples of its displacement',
     ],
   },
   edit_folder_items: {
@@ -120,7 +121,7 @@ export const OPERATION_REFERENCE = Object.freeze({
   duplicate_item: {
     type: 'duplicate_item',
     target: TARGET,
-    newName: 'optional name',
+    newName: 'required when duplicating inside the same folder',
     folderPath: 'optional destination folder',
     offset: { x: 0, y: 64 },
     colors: ['optional replacement #RRGGBB or #RRGGBBAA colors'],
@@ -215,7 +216,7 @@ export const OPERATION_REFERENCE = Object.freeze({
 });
 
 export function getOperationReference(names) {
-  const requested = Array.isArray(names) && names.length ? names : Object.keys(OPERATION_REFERENCE);
+  const requested = Array.isArray(names) ? names : [];
   return Object.fromEntries(
     requested
       .filter((name) => Object.hasOwn(OPERATION_REFERENCE, name))

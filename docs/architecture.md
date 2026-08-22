@@ -4,6 +4,8 @@ Pigmi is an Electron application with a Vue renderer and a standalone MCP server
 boundaries are intentional: renderer code never receives direct Node.js access, and an MCP client
 never receives a generic Electron or filesystem API.
 
+For a shorter, task-oriented introduction to the codebase, see [code-guide.md](code-guide.md).
+
 ## Runtime flow
 
 ```text
@@ -58,11 +60,11 @@ The MCP server uses progressive disclosure instead of returning the serialized t
 
 ```text
 get_overview
-  -> compact settings, selection, IDs, paths, types, and visibility
+  -> compact settings, selection, flat semantic paths, and folder canvas bounds
 get_items
   -> only requested paths, regions, colors, gradients, materials, transforms, or visibility
 get_folders / compare_folders
-  -> complete bounded subtrees and role-aligned comparisons for repeated structures
+  -> bounded subtrees plus raw placement and role evidence for repeated structures
 create_items / duplicate_folder_variants / edit_folder_items
   -> typed high-level writes for common semantic workflows
 get_operation_reference
@@ -77,6 +79,13 @@ An overview omits detailed item payloads and explicitly reports hierarchy validi
 item-read workflow is limited to four requests, 100 items per request, and 200 returned items in
 total. Folder snapshots are limited to eight folders and 300 items. Write requests are limited to
 500 operations.
+
+Folder reads return structure and canvas bounds by default; color, gradient, material, transform,
+and visibility details are opt-in. The MCP model is instructed to infer naming, language/script,
+grouping, direction, and spacing from the nearest relevant examples. Pigmi reports the raw evidence
+but does not hardcode domain vocabulary or classify a document pattern itself. Explicit placement
+wins; when no local pattern is clear, new items use a compact left-to-right, then top-to-bottom
+fallback.
 
 Write operations cover item and folder creation, editing, duplication, deletion, hierarchy
 movement, visibility, explicit selection, texture settings, export settings, and palette-generator

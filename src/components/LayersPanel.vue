@@ -33,7 +33,15 @@
 import LayersItem from './LayersItem.vue';
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useLayersStore, applyLayerSelection, nextLayerId } from '../stores/layers';
-import { findLayerNodeById, resolveLayerPasteTarget } from '../utils/layerPasteTarget';
+import { getCanvasItemBounds } from '../utils/canvasItemGeometry';
+import {
+  collectLayerItemIds,
+  collectLayerNodesByIds,
+  findLayerNodeById,
+  isLayerAncestor,
+  keepTopLevelLayerNodes,
+  resolveLayerPasteTarget,
+} from '../utils/layerPasteTarget';
 const ls: any = useLayersStore();
 
 const props = defineProps<{
@@ -195,40 +203,14 @@ function buildClipboard(cut) {
   const selection = Array.isArray(ls.selected) ? ls.selected : [];
   if (!selection.length) return;
 
-  const idsToMoveSet = new Set(selection);
-  const nodesToMove = [];
-
-  function collectNodes(nodes) {
-    for (const node of nodes) {
-      if (idsToMoveSet.has(node.id)) {
-        nodesToMove.push(node);
-      }
-      if (Array.isArray(node.childs)) {
-        collectNodes(node.childs);
-      }
-    }
-  }
-
-  collectNodes(root);
-
-  function isAncestor(ancestorNode, descendantId) {
-    if (!ancestorNode || !Array.isArray(ancestorNode.childs)) return false;
-    for (const child of ancestorNode.childs) {
-      if (child.id === descendantId) return true;
-      if (isAncestor(child, descendantId)) return true;
-    }
-    return false;
-  }
-
-  const topLevelNodes = nodesToMove.filter(
-    (node) => !nodesToMove.some((other) => other !== node && isAncestor(other, node.id)),
-  );
+  const selectedNodes = collectLayerNodesByIds(root, selection);
+  const topLevelNodes = keepTopLevelLayerNodes(selectedNodes);
 
   if (!topLevelNodes.length) return;
 
   const itemIds = [];
   for (const node of topLevelNodes) {
-    collectItemIds(node, itemIds);
+    collectLayerItemIds(node, itemIds);
   }
 
   const itemSet = new Set(itemIds);
@@ -347,36 +329,10 @@ function applyPastePosition(itemsToInsert, targetX, targetY, fromCanvas) {
 }
 
 function getItemBounds(item) {
-  if (!item || typeof item.x !== 'number' || typeof item.y !== 'number') {
-    return null;
-  }
-  if (item.type === 'g' && Array.isArray(item.size)) {
-    return { x: item.x, y: item.y, w: item.size[0], h: item.size[1] };
-  }
-  if (item.type === 'sg') {
-    let x_steps = 1;
-    let y_steps = 1;
-    if (item.direction && item.steps && item.steps > 1) {
-      let m = item.colors && item.colors.length ? item.colors.length - 1 : 1;
-      let a_steps = 0;
-      if (!m) m = 1;
-      if (item.color_mode === 'black_to_white') {
-        m = 1;
-        a_steps = item.steps + 1;
-      }
-      if (item.direction === 'horizontal') {
-        x_steps = item.steps * m + a_steps;
-      } else {
-        y_steps = item.steps * m + a_steps;
-      }
-    }
-    const size = Number(item.size) || 0;
-    return { x: item.x, y: item.y, w: size * x_steps, h: size * y_steps };
-  }
-  if (typeof item.size === 'number') {
-    return { x: item.x, y: item.y, w: item.size, h: item.size };
-  }
-  return null;
+  const bounds = getCanvasItemBounds(item);
+  if (!bounds) return null;
+
+  return { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height };
 }
 
 function getGroupBounds(items) {
@@ -483,30 +439,12 @@ function moveItem(fromId, toId, zone) {
     return false;
   }
 
-  // Определяем, что перемещаем: всё выделение или только один элемент
+  // Move the complete selection only when the dragged node has no selected parent.
   const isMovingSelection = selection.includes(fromId) && !hasSelectedAncestor(fromId);
   const idsToMove = isMovingSelection ? selection : [fromId];
-  const idsToMoveSet = new Set(idsToMove);
+  const nodesToMove = collectLayerNodesByIds(root, idsToMove);
 
-  const nodesToMove = [];
-
-  // ===================================================================
-  // 1. Собираем все узлы, которые нужно переместить
-  // ===================================================================
-  function collectNodesToMove(nodes) {
-    for (const node of nodes) {
-      if (idsToMoveSet.has(node.id)) {
-        nodesToMove.push(node);
-      }
-      if (Array.isArray(node.childs)) {
-        collectNodesToMove(node.childs);
-      }
-    }
-  }
-
-  collectNodesToMove(root);
-
-  // Если перемещаем только один элемент и его не нашли в выделении — добавляем вручную
+  // A single dragged node may not be part of the current selection.
   if (!isMovingSelection && !nodesToMove.some((n) => n.id === fromId)) {
     const singleInfo = findLayerNodeById(root, fromId);
     if (!singleInfo) return false;
@@ -515,74 +453,49 @@ function moveItem(fromId, toId, zone) {
 
   if (nodesToMove.length === 0) return false;
 
-  // ===================================================================
-  // 2. Оставляем только верхнеуровневые узлы (чтобы не переносить родителя и его детей отдельно)
-  // ===================================================================
-  function isAncestor(ancestorNode, descendantId) {
-    if (!ancestorNode || !Array.isArray(ancestorNode.childs)) return false;
-
-    for (const child of ancestorNode.childs) {
-      if (child.id === descendantId) return true;
-      if (isAncestor(child, descendantId)) return true;
-    }
-    return false;
-  }
-
-  const topLevelNodes = nodesToMove.filter(
-    (node) => !nodesToMove.some((other) => other !== node && isAncestor(other, node.id)),
-  );
+  // Moving a folder already moves its children, so discard selected descendants.
+  const topLevelNodes = keepTopLevelLayerNodes(nodesToMove);
 
   if (topLevelNodes.length === 0) return false;
 
-  // ===================================================================
-  // 3. Находим целевой узел
-  // ===================================================================
   const targetInfo = findLayerNodeById(root, toId);
   if (!targetInfo) return false;
 
-  // Защита: нельзя перетащить элемент в самого себя или внутрь своего потомка
+  // Never move a node into itself or one of its descendants.
   for (const node of topLevelNodes) {
-    if (node.id === toId || isAncestor(node, toId)) {
+    if (node.id === toId || isLayerAncestor(node, toId)) {
       return false;
     }
   }
 
-  // ===================================================================
-  // 4. Определяем, куда вставлять
-  // ===================================================================
   let insertionArray;
   let insertIndex;
 
   if (zone === 'center') {
-    // Внутрь целевого элемента — в конец дочерних
+    // A center drop appends to the target's children.
     if (!Array.isArray(targetInfo.node.childs)) {
       targetInfo.node.childs = [];
     }
     insertionArray = targetInfo.node.childs;
     insertIndex = insertionArray.length;
   } else {
-    // Рядом с целевым — над или под
+    // Top and bottom drops insert beside the target.
     const parentArray = targetInfo.parentArray || root;
     insertIndex = zone === 'top' ? targetInfo.index : targetInfo.index + 1;
     insertionArray = parentArray;
-    // Защищаем от выхода за границы
     insertIndex = Math.max(0, Math.min(insertIndex, parentArray.length));
   }
 
   const targetParentArray = insertionArray;
   let adjustedInsertIndex = insertIndex;
 
-  // ===================================================================
-  // 5. Удаляем узлы из старых позиций
-  // ===================================================================
   const nodesToInsert = [];
 
   for (const node of topLevelNodes) {
     const currentInfo = findLayerNodeById(root, node.id);
     if (!currentInfo) continue;
 
-    // Если удаляем из того же массива, куда вставляем, и индекс удаления меньше индекса вставки
-    // — после удаления индекс вставки уменьшится
+    // Removing an earlier sibling shifts the destination one position left.
     if (currentInfo.parentArray === targetParentArray && currentInfo.index < adjustedInsertIndex) {
       adjustedInsertIndex = Math.max(0, adjustedInsertIndex - 1);
     }
@@ -597,9 +510,7 @@ function moveItem(fromId, toId, zone) {
     props.onStructureChanged('before');
   }
 
-  // ===================================================================
-  // 6. Финальное место вставки (особенно важно для 'center' после удалений)
-  // ===================================================================
+  // Resolve a center target again because removing nodes can change its location.
   if (zone === 'center') {
     const freshTarget = findLayerNodeById(root, toId);
     if (!freshTarget) return false;
@@ -616,15 +527,9 @@ function moveItem(fromId, toId, zone) {
     insertIndex = Math.max(0, Math.min(insertIndex, insertionArray.length));
   }
 
-  // ===================================================================
-  // 7. Вставляем в новое место
-  // ===================================================================
   insertionArray.splice(insertIndex, 0, ...nodesToInsert);
   collapseEmptyFolders(root);
 
-  // ===================================================================
-  // 8. Обновляем выделение, если перемещали всю группу
-  // ===================================================================
   if (isMovingSelection) {
     applyLayerSelection(
       ls,
@@ -639,18 +544,6 @@ function moveItem(fromId, toId, zone) {
   return true;
 }
 
-function collectItemIds(node, acc) {
-  if (!node) return;
-  if (node.type === 'item') {
-    acc.push(node.id);
-  }
-  if (Array.isArray(node.childs)) {
-    for (const child of node.childs) {
-      collectItemIds(child, acc);
-    }
-  }
-}
-
 function removeNodesByIds(nodes, idsSet, removedItemIds) {
   for (let i = nodes.length - 1; i >= 0; i--) {
     const node = nodes[i];
@@ -658,7 +551,7 @@ function removeNodesByIds(nodes, idsSet, removedItemIds) {
       if (node.type === 'item') {
         removedItemIds.push(node.id);
       } else if (node.type === 'folder') {
-        collectItemIds(node, removedItemIds);
+        collectLayerItemIds(node, removedItemIds);
       }
       nodes.splice(i, 1);
       continue;
@@ -994,7 +887,6 @@ function generateIDs(items) {
     syncTextureItemsOrder();
   }
   collapseEmptyFolders(layerTree.value.items);
-  //console.log(layerTree.value)
 }
 
 onMounted(() => {

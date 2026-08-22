@@ -15,6 +15,53 @@ export function findLayerNodeById(nodes, id, parent = null) {
   return null;
 }
 
+export function collectLayerNodesByIds(nodes, ids, result = []) {
+  if (!Array.isArray(nodes)) return result;
+
+  const selectedIds = ids instanceof Set ? ids : new Set(ids);
+  for (const node of nodes) {
+    if (selectedIds.has(node.id)) {
+      result.push(node);
+    }
+    collectLayerNodesByIds(node.childs, selectedIds, result);
+  }
+
+  return result;
+}
+
+export function isLayerAncestor(ancestorNode, descendantId) {
+  if (!ancestorNode || !Array.isArray(ancestorNode.childs)) return false;
+
+  return ancestorNode.childs.some(
+    (child) => child.id === descendantId || isLayerAncestor(child, descendantId),
+  );
+}
+
+/**
+ * Removes selected descendants when their ancestor is already in the list.
+ * This prevents copy, cut, and drag operations from handling the same subtree twice.
+ */
+export function keepTopLevelLayerNodes(nodes) {
+  return nodes.filter(
+    (node) => !nodes.some((candidate) => candidate !== node && isLayerAncestor(candidate, node.id)),
+  );
+}
+
+export function collectLayerItemIds(node, result = []) {
+  if (!node) return result;
+
+  if (node.type === 'item') {
+    result.push(node.id);
+  }
+  if (Array.isArray(node.childs)) {
+    for (const child of node.childs) {
+      collectLayerItemIds(child, result);
+    }
+  }
+
+  return result;
+}
+
 /**
  * Resolves a paste destination exclusively from the current selection.
  * Stale click/active anchors must never redirect a paste after deselection.

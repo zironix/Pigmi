@@ -10,7 +10,7 @@ import { getOperationReference } from './operation-reference.mjs';
 
 const bridge = new PigmiBridgeClient();
 const server = new McpServer(
-  { name: 'pigmi', version: '1.3.1' },
+  { name: 'pigmi', version: '1.4.0' },
   { instructions: FULL_PIGMI_MCP_INSTRUCTIONS },
 );
 
@@ -115,7 +115,7 @@ const layoutSchema = z
 
 function textResult(result) {
   return {
-    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    content: [{ type: 'text', text: JSON.stringify(result) }],
     structuredContent: result,
   };
 }
@@ -157,7 +157,7 @@ server.registerTool(
   'pigmi_get_overview',
   {
     description:
-      'Start here. Returns document settings, selection, explicit folder-child relationships, and hierarchy validation without full item payloads.',
+      'Start here. Returns compact settings, selection, flat semantic paths, folder canvas bounds, and hierarchy validation without item payloads.',
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async () => callBridge('get_overview', {}),
@@ -178,10 +178,10 @@ server.registerTool(
   'pigmi_get_folders',
   {
     description:
-      'Fetch exact folders as complete semantic templates: nested structure, relative child paths, and requested item fields. Use this for repeated objects, variants, assemblies, or any edit that must preserve a hierarchy.',
+      'Fetch exact folders as complete templates with bounds, nested relative paths, and only requested item fields. Use for variants or edits that must preserve hierarchy.',
     inputSchema: {
       paths: z.array(z.string().min(1)).min(1).max(8),
-      fields: z.array(detailFieldSchema).default(['colors', 'gradient', 'material']),
+      fields: z.array(detailFieldSchema).default([]),
     },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
@@ -192,10 +192,10 @@ server.registerTool(
   'pigmi_compare_folders',
   {
     description:
-      'Aligns items from several folders by exact relative semantic path and reports missing roles and field differences. Use before extending a family of objects or applying consistent cross-variant edits.',
+      'Aligns sibling folders by exact relative paths and returns placements, missing roles, and requested field differences. Use before extending a repeated family.',
     inputSchema: {
       paths: z.array(z.string().min(1)).min(2).max(8),
-      fields: z.array(detailFieldSchema).default(['colors', 'gradient', 'material']),
+      fields: z.array(detailFieldSchema).default([]),
     },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
@@ -216,7 +216,7 @@ server.registerTool(
   'pigmi_duplicate_folder_variants',
   {
     description:
-      'Create complete variants from an existing folder template. Every descendant is preserved; itemEdits change generated children by exact path relative to the source folder, so generated ids are not needed.',
+      'Duplicates complete folder templates. Infer names and source-relative offsets from inspected siblings; itemEdits address generated children by exact relative path.',
     inputSchema: {
       sourcePath: z.string().min(1),
       variants: z
@@ -286,7 +286,7 @@ server.registerTool(
   'pigmi_create_items',
   {
     description:
-      'Creates a typed batch of new gradient or material items, optionally in nested folders and with compact layout. Use for genuinely new palettes or structures when no existing folder should be used as a template.',
+      'Creates genuinely new gradient or material items. Continue inspected local geometry when clear; otherwise use compact left-to-right, then top-to-bottom layout.',
     inputSchema: {
       items: z.array(gradientItemSchema).min(1).max(200),
       defaults: gradientItemSchema.partial().optional(),
@@ -311,7 +311,7 @@ server.registerTool(
   {
     description:
       'Returns concise argument references for requested edit operation types. Request only the operations you plan to use.',
-    inputSchema: { operations: z.array(z.string()).max(20).default([]) },
+    inputSchema: { operations: z.array(z.string()).min(1).max(20) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async ({ operations }) => textResult({ operations: getOperationReference(operations) }),

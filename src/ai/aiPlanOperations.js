@@ -360,10 +360,7 @@ export function createDefaultItemTemplate({
 
   const item = {
     id: nextLayerId(),
-    name: normalizeGeneratedItemName(
-      typeof op.name === 'string' && op.name.trim() ? op.name.trim() : 'Item',
-      op.folderPath,
-    ),
+    name: normalizeGeneratedItemName(op.name),
     type: itemType,
     color_mode: colorMode,
     direction,

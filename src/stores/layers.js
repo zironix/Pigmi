@@ -22,7 +22,6 @@ export const useLayersStore = defineStore('layers', {
       renaming_id: null,
     };
   },
-  //state: () => ({ count: 0 })
   actions: {
     setDraggedId(id) {
       this.dragged_id = id;

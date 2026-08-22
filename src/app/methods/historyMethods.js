@@ -24,7 +24,6 @@ export const historyMethods = {
     }
   },
   addUndo(event) {
-    //console.log(this.undo_array)
     const target = event && typeof event === 'object' ? event.target : null;
     const tag = target && target.tagName ? target.tagName.toLowerCase() : '';
     if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) {
@@ -45,7 +44,6 @@ export const historyMethods = {
     });
   },
   undo() {
-    //console.log(this.undo_array)
     if (this.undo_array.length > 1) {
       const collapsedMap = new Map();
       const collectCollapsedState = (nodes) => {

@@ -244,39 +244,10 @@ export function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-export function escapeRegExp(str) {
-  return String(str || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-export function normalizeGeneratedItemName(name, folderPath) {
-  let next = String(name || '')
+export function normalizeGeneratedItemName(name) {
+  return String(name || '')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!next) return 'Item';
-
-  const folderLeaf =
-    String(folderPath || '')
-      .split('/')
-      .map((x) => x.trim())
-      .filter(Boolean)
-      .pop() || '';
-
-  if (folderLeaf) {
-    const esc = escapeRegExp(folderLeaf);
-    const endRe = new RegExp(`(?:\\s|_|-)*${esc}$`, 'i');
-    const startRe = new RegExp(`^${esc}(?:\\s|_|-)*`, 'i');
-    next = next.replace(endRe, '').replace(startRe, '').trim();
-  }
-
-  if (!next) next = 'Item';
-  return next
-    .split(' ')
-    .filter(Boolean)
-    .map((part) => {
-      if (!part) return part;
-      return part[0].toUpperCase() + part.slice(1);
-    })
-    .join(' ');
 }
 
 export function normalizePathLike(value) {
@@ -506,6 +477,51 @@ export function computeItemBounds(item) {
     ySteps = Math.max(1, (colorsCount - 1) * steps);
   }
   return { w: baseSize * xSteps, h: baseSize * ySteps };
+}
+
+/**
+ * Returns the canvas rectangle occupied by every item below a layer folder.
+ * The result is raw geometry; callers and models decide whether it forms a pattern.
+ */
+export function computeFolderBounds(folderNode, itemById) {
+  if (!folderNode || folderNode.type !== 'folder' || !(itemById instanceof Map)) return null;
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  const visit = (nodes) => {
+    if (!Array.isArray(nodes)) return;
+    for (const node of nodes) {
+      if (node?.type === 'folder') {
+        visit(node.childs);
+        continue;
+      }
+      if (node?.type !== 'item') continue;
+
+      const item = getMapValueById(itemById, node.id);
+      const bounds = computeItemBounds(item);
+      if (!item || !bounds) continue;
+
+      const x = toNumber(item.x, 0);
+      const y = toNumber(item.y, 0);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + bounds.w);
+      maxY = Math.max(maxY, y + bounds.h);
+    }
+  };
+
+  visit(folderNode.childs);
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null;
+
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  };
 }
 
 export function rectanglesOverlap(a, b) {
