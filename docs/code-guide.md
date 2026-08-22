@@ -36,6 +36,7 @@ the files under `src/app/methods/`, even though the function is not declared ins
 | Undo history        | `src/app/methods/historyMethods.js`                    | snapshots, undo, redo                                |
 | Colors and palettes | `src/app/methods/colorMethods.js`, `paletteMethods.js` | color edits and generation                           |
 | MCP requests        | `src/app/methods/mcpMethods.js`, `src/ai/`             | validated editor reads and atomic edits              |
+| Release updates     | `src/main/updates/`, `src/main/ipc/updateHandlers.js`  | version comparison and fixed GitHub Releases link    |
 | Native operations   | `src/main/ipc/`                                        | narrow filesystem and window requests                |
 | Shared calculations | `src/utils/`                                           | pure functions that can be tested without Vue        |
 

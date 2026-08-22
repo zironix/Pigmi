@@ -132,6 +132,15 @@ already listed by the open Pigmi project.
 Forge copies that bundle next to the packaged application, so MCP clients need Node.js but do not
 need Pigmi's development dependencies.
 
+### Release update check
+
+The renderer gets the installed version through a narrow IPC method and asks the main process to
+check GitHub once per application session. The main process uses Electron's network stack, an
+eight-second timeout, and GitHub's latest published stable-release endpoint. Network failures,
+rate limits, missing releases, and malformed tags return a quiet "no result" state and never delay
+or interrupt editor startup. The renderer can request only Pigmi's fixed Releases page; it cannot
+pass arbitrary URLs to `shell.openExternal`.
+
 ### State and saved files
 
 Pinia owns transient layer selection state. Texture data remains serializable and is saved as JSON.

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, net, shell } from 'electron';
 import started from 'electron-squirrel-startup';
 
 import { registerIpcHandlers } from './main/ipc';
@@ -11,7 +11,13 @@ if (started) {
   app.quit();
 }
 
-registerIpcHandlers(ipcMain, () => mainWindow);
+registerIpcHandlers({
+  app,
+  fetchImpl: (...args) => net.fetch(...args),
+  getMainWindow: () => mainWindow,
+  ipcMain,
+  shell,
+});
 const mcpIntegration = createMcpIntegration({ app, ipcMain, getMainWindow: () => mainWindow });
 
 app.whenReady().then(async () => {

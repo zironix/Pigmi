@@ -1,4 +1,7 @@
 export const IPC_CHANNELS = Object.freeze({
+  appInfo: 'app-info',
+  checkForUpdates: 'check-for-updates',
+  openReleasesPage: 'open-releases-page',
   selectFolder: 'select-folder',
   selectImageFile: 'select-image-file',
   readDirectory: 'read-dir',

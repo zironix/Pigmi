@@ -15,7 +15,19 @@
       </div>
       <div class="logo-text">
         <div>PIGMI</div>
-        <div class="version">v2.1</div>
+        <div class="version">
+          <span>v{{ appVersion || '…' }}</span>
+          <button
+            v-if="updateAvailable"
+            class="update-available"
+            type="button"
+            :title="`Pigmi ${latestVersion} is available — open GitHub Releases`"
+            :aria-label="`Pigmi ${latestVersion} is available; open GitHub Releases`"
+            @click.stop="openUpdatePage"
+          >
+            <i class="las la-external-link-square-alt" aria-hidden="true"></i>
+          </button>
+        </div>
       </div>
 
       <div class="dragger"></div>

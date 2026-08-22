@@ -19,8 +19,10 @@ function subscribe(channel, callback) {
 }
 
 const electronApi = Object.freeze({
+  checkForUpdates: invoke(IPC_CHANNELS.checkForUpdates),
   closeWindow: invoke(IPC_CHANNELS.closeWindow),
   fileExists: invoke(IPC_CHANNELS.fileExists),
+  getAppInfo: invoke(IPC_CHANNELS.appInfo),
   getMcpInfo: invoke(IPC_CHANNELS.mcpInfo),
   isWindowMaximized: invoke(IPC_CHANNELS.isWindowMaximized),
   joinPath: pathHelpers.joinPath,
@@ -29,6 +31,7 @@ const electronApi = Object.freeze({
   onMcpRequest: (callback) => subscribe(IPC_CHANNELS.mcpRequest, callback),
   onMcpStatus: (callback) => subscribe(IPC_CHANNELS.mcpStatus, callback),
   openFolder: invoke(IPC_CHANNELS.openFolder),
+  openReleasesPage: invoke(IPC_CHANNELS.openReleasesPage),
   platform: process.platform,
   readDir: invoke(IPC_CHANNELS.readDirectory),
   readBinaryFile: invoke(IPC_CHANNELS.readBinaryFile),

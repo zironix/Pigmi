@@ -10,6 +10,7 @@ import { fileMethods } from './methods/filesMethods';
 import { historyMethods } from './methods/historyMethods';
 import { mcpMethods } from './methods/mcpMethods';
 import { paletteMethods } from './methods/paletteMethods';
+import { updateMethods } from './methods/updateMethods';
 import { uiMethods } from './methods/uiMethods';
 import {
   createCodexMcpCommand,
@@ -51,6 +52,9 @@ export default {
       is_syncing_layers: false,
       save_timer: false,
       current_tab: 'texture',
+      appVersion: '',
+      latestVersion: '',
+      updateAvailable: false,
 
       // Sidebar and split-view layout state.
       isItemSearchSplitVisible: false,
@@ -412,9 +416,11 @@ export default {
     ...historyMethods,
     ...mcpMethods,
     ...paletteMethods,
+    ...updateMethods,
     ...uiMethods,
   },
   mounted() {
+    void this.initializeUpdateStatus();
     void this.initializeMcpIntegration();
     this.canvas = this.$refs.texture;
     this.canvas_albedo = this.$refs.albedo_texture;

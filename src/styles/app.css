@@ -139,6 +139,31 @@ body {
 .top-controls .logo-text .version {
   text-transform: none;
   color: #2b2d30;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.top-controls .update-available {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: #fdc822;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px;
+  transition:
+    color 0.2s ease,
+    transform 0.2s ease;
+  -webkit-app-region: no-drag;
+}
+.top-controls .update-available:hover {
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+.top-controls .update-available:focus-visible {
+  outline: 2px solid #fdc822;
+  outline-offset: 2px;
 }
 .top-controls .dragger {
   width: 100%;
