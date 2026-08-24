@@ -13,10 +13,19 @@ describe('MCP tool result serialization', () => {
     expect(result).not.toHaveProperty('structuredContent');
   });
 
-  it('keeps tool errors concise', () => {
-    expect(errorToolResult(new Error('Editor unavailable'))).toEqual({
-      isError: true,
-      content: [{ type: 'text', text: 'Editor unavailable' }],
+  it('makes failure impossible to mistake for a successful edit', () => {
+    const error = new Error('Editor unavailable');
+    error.code = 'PIGMI_UNAVAILABLE';
+    const result = errorToolResult(error);
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      ok: false,
+      status: 'error',
+      successConfirmed: false,
+      error: { code: 'PIGMI_UNAVAILABLE', message: 'Editor unavailable' },
     });
+    expect(payload.instruction).toContain('Do not claim success');
   });
 });

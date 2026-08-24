@@ -41,7 +41,6 @@ export function classifyWheelInput({
   if (platform !== 'darwin' || deltaMode !== 0) return 'zoom';
 
   const horizontalDelta = Math.abs(Number(deltaX) || 0);
-  const verticalDelta = Math.abs(Number(deltaY) || 0);
   const legacyVerticalDelta = Math.abs(Number(wheelDeltaY) || 0);
 
   // Chromium keeps the legacy ±120 step for a conventional notched wheel even
@@ -49,10 +48,12 @@ export function classifyWheelInput({
   // from a vertical two-finger gesture without sacrificing trackpad panning.
   if (horizontalDelta === 0 && legacyVerticalDelta >= 120) return 'zoom';
 
-  const largestDelta = Math.max(horizontalDelta, verticalDelta);
   const hasSubpixelDelta = !Number.isInteger(Number(deltaX)) || !Number.isInteger(Number(deltaY));
-  const looksLikePreciseScrolling =
-    horizontalDelta > 0 || hasSubpixelDelta || (largestDelta > 0 && largestDelta < 80);
+
+  // Some mouse drivers omit wheelDeltaY and expose a small integer pixel delta.
+  // Treat a purely vertical integer event as a wheel; trackpad panning needs
+  // stronger evidence such as horizontal movement or subpixel precision.
+  const looksLikePreciseScrolling = horizontalDelta > 0 || hasSubpixelDelta;
 
   return looksLikePreciseScrolling ? 'pan' : 'zoom';
 }

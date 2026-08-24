@@ -5,6 +5,7 @@ import {
   buildFolderSnapshots,
   compareFolderSnapshots,
 } from '../../ai/editorInspection';
+import { collectItemFolderPaths, getMapValueById } from '../../ai/aiPlanShared';
 import { applyLayerSelection } from '../../stores/layers';
 
 const MAX_OPERATIONS = 500;
@@ -84,6 +85,27 @@ function serializeMcpError(error) {
   };
 }
 
+export function buildMcpWriteResult({ applied, dryRun, revision, result, texture }) {
+  const itemFolderPaths = new Map();
+  collectItemFolderPaths(texture?.layers, '', itemFolderPaths);
+  const createdFolderPaths = [
+    ...new Set(
+      (result?.createdItemIds || []).map((id) => getMapValueById(itemFolderPaths, id) || '(root)'),
+    ),
+  ];
+
+  return {
+    ok: true,
+    status: dryRun ? 'dry_run' : 'success',
+    applied,
+    dryRun,
+    revision,
+    ...result,
+    createdCount: result?.createdItemIds?.length || 0,
+    createdFolderPaths,
+  };
+}
+
 export const mcpMethods = {
   getMcpSelectionIds() {
     return Array.isArray(this.ls?.selected) ? [...this.ls.selected] : [];
@@ -151,7 +173,13 @@ export const mcpMethods = {
 
     const nextRevision = documentRevision(nextTexture);
     if (params?.dryRun === true) {
-      return { applied: false, dryRun: true, revision: nextRevision, ...result };
+      return buildMcpWriteResult({
+        applied: false,
+        dryRun: true,
+        revision: nextRevision,
+        result,
+        texture: nextTexture,
+      });
     }
 
     this.pushUndoSnapshot();
@@ -165,7 +193,13 @@ export const mcpMethods = {
     this.draw();
     this.pushUndoSnapshot();
 
-    return { applied: true, dryRun: false, revision: nextRevision, ...result };
+    return buildMcpWriteResult({
+      applied: true,
+      dryRun: false,
+      revision: nextRevision,
+      result,
+      texture: this.texture,
+    });
   },
   async saveMcpDocument({ exportMaps = false } = {}) {
     if (!this.folder_path || !this.selected_file) {

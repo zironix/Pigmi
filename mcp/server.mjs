@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 
 import { PigmiBridgeClient } from './bridge-client.mjs';
+import { buildCreateItemsOperation } from './create-items.mjs';
 import {
   FULL_PIGMI_MCP_INSTRUCTIONS,
   PIGMI_EDIT_PROMPT,
@@ -15,7 +16,7 @@ import { errorToolResult, jsonToolResult } from './tool-results.mjs';
 
 const bridge = new PigmiBridgeClient();
 const server = new McpServer(
-  { name: 'pigmi', version: '1.4.1' },
+  { name: 'pigmi', version: '1.5.0' },
   { instructions: PIGMI_SERVER_INSTRUCTIONS },
 );
 
@@ -81,9 +82,7 @@ const folderItemEditSchema = z.object({
   material: materialSchema.optional(),
 });
 
-const gradientItemSchema = z.object({
-  name: z.string().min(1),
-  folderPath: z.string().optional(),
+const gradientItemStyleFields = {
   itemType: z.enum(['g', 'sg']).optional(),
   shape: z.enum(['l', 'r', 'c']).optional(),
   direction: z.enum(['horizontal', 'vertical']).optional(),
@@ -98,10 +97,27 @@ const gradientItemSchema = z.object({
   sizeW: z.number().positive().optional(),
   sizeH: z.number().positive().optional(),
   steps: z.number().positive().optional(),
+  material: materialSchema.optional(),
+};
+
+const gradientItemSchema = z.object({
+  name: z.string().min(1),
+  colors: z.array(z.string()).min(1),
+  folderPath: z
+    .string()
+    .optional()
+    .describe('Per-item destination override; omit when the common folderPath applies.'),
+  ...gradientItemStyleFields,
   x: z.number().optional(),
   y: z.number().optional(),
-  material: materialSchema.optional(),
 });
+
+const gradientDefaultsSchema = z
+  .record(z.string(), z.unknown())
+  .optional()
+  .describe(
+    'Shared optional item fields; each item overrides them. Omit to inherit Pigmi defaults.',
+  );
 
 const layoutSchema = z
   .object({
@@ -284,24 +300,29 @@ server.registerTool(
   'pigmi_create_items',
   {
     description:
-      'Fast path for straightforward new palettes: after one overview, create all requested items directly. Infer names and clear palette-group geometry. Inside each palette, use an edge-to-edge zero-gap layout unless the user explicitly requested spacing; with no clear group placement, flow compactly left-to-right then top-to-bottom. Do not fetch an operation reference, dry-run, preview, or validate unless ambiguity requires it.',
+      'One-write fast path for a new palette after overview. Omit folderPath for root; use it only when the user or a clear local pattern requires a folder, and missing folders are created automatically. Items are edge-to-edge unless spacing is explicit; otherwise flow left-to-right then top-to-bottom. A success response is final: never call again merely to organize. Do not fetch references, preview, or validate unless ambiguity requires it.',
     inputSchema: {
       items: z.array(gradientItemSchema).min(1).max(200),
-      defaults: gradientItemSchema.partial().optional(),
+      folderPath: z
+        .string()
+        .optional()
+        .describe('Common destination; omit or use an empty string for root.'),
+      defaults: gradientDefaultsSchema,
       layout: layoutSchema,
       expectedRevision: z.string().optional(),
       dryRun: z.boolean().default(false),
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   },
-  async ({ items, defaults, layout, expectedRevision, dryRun }) =>
-    callBridge('apply_operations', {
-      operations: [{ type: 'create_gradient_items', defaults, items }],
+  async ({ items, folderPath, defaults, layout, expectedRevision, dryRun }) => {
+    return callBridge('apply_operations', {
+      operations: [buildCreateItemsOperation({ items, folderPath, defaults })],
       layout,
       expectedRevision,
       dryRun,
       allowPartial: false,
-    }),
+    });
+  },
 );
 
 server.registerTool(

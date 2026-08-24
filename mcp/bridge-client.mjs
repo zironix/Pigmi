@@ -55,10 +55,12 @@ export class PigmiBridgeClient {
       source = await fs.readFile(this.connectionFile, 'utf8');
     } catch (error) {
       if (error?.code === 'ENOENT') {
-        throw new Error(
+        const unavailableError = new Error(
           `Pigmi is not running (connection file not found: ${this.connectionFile}). Start Pigmi and retry through MCP; do not edit Pigmi project JSON files directly.`,
           { cause: error },
         );
+        unavailableError.code = 'PIGMI_UNAVAILABLE';
+        throw unavailableError;
       }
       throw error;
     }
@@ -70,24 +72,36 @@ export class PigmiBridgeClient {
       !Number.isInteger(connection?.port) ||
       typeof connection?.token !== 'string'
     ) {
-      throw new Error(
+      const connectionError = new Error(
         'Pigmi MCP connection file is invalid. Restart Pigmi and retry through MCP; do not edit Pigmi project JSON files directly.',
       );
+      connectionError.code = 'PIGMI_CONNECTION_INVALID';
+      throw connectionError;
     }
     return connection;
   }
 
   async call(method, params = {}) {
     const connection = await this.readConnection();
-    const response = await this.fetch(`http://${connection.host}:${connection.port}/rpc`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${connection.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ clientId: this.clientId, method, params }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    let response;
+    try {
+      response = await this.fetch(`http://${connection.host}:${connection.port}/rpc`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${connection.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ clientId: this.clientId, method, params }),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      const unavailableError = new Error(
+        'Pigmi is unavailable or did not respond. Start or reopen Pigmi, then retry through MCP; do not claim that any change succeeded.',
+        { cause: error },
+      );
+      unavailableError.code = 'PIGMI_UNAVAILABLE';
+      throw unavailableError;
+    }
 
     const payload = await response.json();
     if (!response.ok || payload?.error) {

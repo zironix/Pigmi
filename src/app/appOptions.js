@@ -268,6 +268,12 @@ export default {
       },
       deep: true,
     },
+    'texture.width'() {
+      this.redrawCanvasAfterResize();
+    },
+    'texture.height'() {
+      this.redrawCanvasAfterResize();
+    },
     selected(newValue, oldValue) {
       const fromLayers = this.is_syncing_layers;
       this.is_syncing_layers = false;

@@ -43,6 +43,7 @@ describe('Pigmi MCP instructions', () => {
     expect(PIGMI_EDIT_PROMPT).toContain('never use hardcoded domain conventions');
     expect(PIGMI_EDIT_PROMPT).toContain('bounds/transforms');
     expect(PIGMI_EDIT_PROMPT).toContain('edge-to-edge unless the user explicitly requests spacing');
+    expect(PIGMI_EDIT_PROMPT).toContain('Never claim success after a failed tool');
   });
 
   it('preserves complete repeated structures and exact requested counts', () => {
@@ -129,10 +130,11 @@ describe('Pigmi MCP instructions', () => {
     expect(PIGMI_SERVER_INSTRUCTIONS).toContain(
       'straightforward new palette needs only overview then pigmi_create_items',
     );
-    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('never hardcode domain conventions');
-    expect(PIGMI_SERVER_INSTRUCTIONS).toContain(
-      'edge-to-edge unless the user explicitly requests spacing',
-    );
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('never hardcode conventions');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('Create at root');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('folderPath creates it');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('never claim success');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('edge-to-edge unless spacing is explicit');
     expect(PIGMI_SERVER_INSTRUCTIONS).toContain('left-to-right, then top-to-bottom');
     expect(PIGMI_SERVER_INSTRUCTIONS).toContain('avoid repeated reads');
   });

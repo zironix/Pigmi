@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isProxy, reactive } from 'vue';
 
-import { mcpMethods } from '../src/app/methods/mcpMethods';
+import { buildMcpWriteResult, mcpMethods } from '../src/app/methods/mcpMethods';
 
 const originalWindow = globalThis.window;
 
@@ -10,6 +10,33 @@ afterEach(() => {
 });
 
 describe('renderer MCP responses', () => {
+  it('reports successful writes and their actual destinations explicitly', () => {
+    const result = buildMcpWriteResult({
+      applied: true,
+      dryRun: false,
+      revision: '20-cafebabe',
+      result: { createdItemIds: [11, 12], warnings: [] },
+      texture: {
+        layers: [
+          { type: 'item', id: 11 },
+          {
+            type: 'folder',
+            name: 'Low-poly Car',
+            childs: [{ type: 'item', id: 12 }],
+          },
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'success',
+      applied: true,
+      createdCount: 2,
+      createdFolderPaths: ['(root)', 'Low-poly Car'],
+    });
+  });
+
   it('converts Vue proxies into Electron IPC-safe data', async () => {
     const respondToMcpRequest = vi.fn();
     globalThis.window = { electronAPI: { respondToMcpRequest } };

@@ -59,6 +59,17 @@ describe('MCP bridge client', () => {
     });
   });
 
+  it('turns low-level fetch failures into an actionable unavailable error', async () => {
+    const connectionFile = await createConnectionFile();
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('fetch failed'));
+    const client = new PigmiBridgeClient({ connectionFile, fetchImpl });
+
+    await expect(client.call('get_overview')).rejects.toMatchObject({
+      code: 'PIGMI_UNAVAILABLE',
+      message: expect.stringContaining('do not claim that any change succeeded'),
+    });
+  });
+
   it('rejects invalid discovery metadata before making a request', async () => {
     const connectionFile = await createConnectionFile();
     await fs.writeFile(connectionFile, JSON.stringify({ host: '0.0.0.0', token: 'bad' }));
