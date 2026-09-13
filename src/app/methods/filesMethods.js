@@ -1,3 +1,40 @@
+import { MATERIAL_CHANNELS } from '../../utils/canvasRendering';
+
+const saveStates = new WeakMap();
+
+function captureExportSnapshot(editor, canPreview) {
+  const snapshot = {
+    folder_path: editor.folder_path,
+    selected_file: editor.selected_file,
+    slash: editor.slash,
+    texture: { ...editor.texture },
+    serializedTexture: JSON.stringify(editor.texture),
+    finalZoom: editor.finalZoom,
+    ctx: editor.ctx,
+    canPreview,
+  };
+  const channels = new Set(
+    MATERIAL_CHANNELS.filter((channel) => editor.texture[`save_${channel}`]),
+  );
+  if (channels.has('albedo')) {
+    channels.add('emission');
+    channels.add('emission_crop');
+  }
+  // Export from private canvases: editing or loading another document during
+  // asynchronous image decoding must not change the file currently being saved.
+  for (const channel of channels) {
+    const source = editor[`canvas_${channel}`];
+    const canvas = document.createElement('canvas');
+    canvas.width = source.width;
+    canvas.height = source.height;
+    const context = canvas.getContext('2d');
+    context.drawImage(source, 0, 0);
+    snapshot[`canvas_${channel}`] = canvas;
+    snapshot[`ctx_${channel}`] = context;
+  }
+  return snapshot;
+}
+
 async function loadProjectImage(filePath) {
   // Chromium may reject arbitrary file:// URLs from a context-isolated
   // renderer. Read only an authorized project file through the main process
@@ -27,13 +64,6 @@ export const fileMethods = {
       this.selected_file = false;
       this.getFiles();
     }
-    /*const file = await open({
-        multiple: false,
-        directory: true,
-      });
-      this.folder_path = file;
-      this.selected_file = false;
-      this.getFiles();*/
   },
   async getFiles() {
     this.files_in_folder = [];
@@ -45,8 +75,7 @@ export const fileMethods = {
         files.forEach((file) => {
           // Project entries are JSON files; directories and other files are ignored.
           if (file.isFile) {
-            const ext = file.name.substr(-5);
-            if (ext === '.json') {
+            if (file.name.endsWith('.json')) {
               this.files_in_folder.push(file.name);
               if (!this.selected_file) {
                 this.selected_file = file.name;
@@ -116,24 +145,29 @@ export const fileMethods = {
           this.texture.width,
           this.texture.height,
         );
-        this[`ctx_emission`].globalCompositeOperation = 'source-over';
-        this[`ctx_emission`].drawImage(imgBitmap1, 0, 0);
-
-        this[`ctx_emission`].globalCompositeOperation = 'source-in';
-        this[`ctx_emission`].drawImage(image, 0, 0);
-
-        const imgBitmap2 = await createImageBitmap(
-          emission_data,
-          0,
-          0,
-          this.texture.width,
-          this.texture.height,
-        );
-        this[`ctx_emission`].globalCompositeOperation = 'source-over';
-        this[`ctx_emission`].drawImage(imgBitmap2, 0, 0);
+        let emissionBitmap;
+        try {
+          emissionBitmap = await createImageBitmap(
+            emission_data,
+            0,
+            0,
+            this.texture.width,
+            this.texture.height,
+          );
+          this.ctx_emission.globalCompositeOperation = 'source-over';
+          this.ctx_emission.drawImage(imgBitmap1, 0, 0);
+          this.ctx_emission.globalCompositeOperation = 'source-in';
+          this.ctx_emission.drawImage(image, 0, 0);
+          this.ctx_emission.globalCompositeOperation = 'source-over';
+          this.ctx_emission.drawImage(emissionBitmap, 0, 0);
+        } finally {
+          this.ctx_emission.globalCompositeOperation = 'source-over';
+          imgBitmap1.close?.();
+          emissionBitmap?.close?.();
+        }
       }
 
-      if (this.texture.mix_preview) {
+      if (this.texture.mix_preview && (this.canPreview?.() ?? true)) {
         this.ctx.drawImage(
           image,
           0,
@@ -142,62 +176,51 @@ export const fileMethods = {
           this.texture.height * this.finalZoom,
         );
       }
-
-      await writeCanvas();
-    } else {
-      await writeCanvas();
     }
+    await writeCanvas();
   },
   async save() {
-    let upd_int = 100;
-    if (this.texture.update_interval < 100) {
-      upd_int = 100;
-    } else {
-      upd_int = this.texture.update_interval;
-    }
-
+    const updateInterval = Math.max(100, Number(this.texture.update_interval) || 100);
     clearTimeout(this.save_timer);
+    let state = saveStates.get(this);
+    if (!state) {
+      state = { revision: 0, pending: Promise.resolve() };
+      saveStates.set(this, state);
+    }
+    const revision = ++state.revision;
+    if (!this.sync || !this.folder_path || !this.selected_file) return;
+    const texture = this.texture;
+    const folderPath = this.folder_path;
+    const selectedFile = this.selected_file;
+    const isCurrent = () =>
+      this.sync &&
+      state.revision === revision &&
+      this.texture === texture &&
+      this.folder_path === folderPath &&
+      this.selected_file === selectedFile;
 
-    this.save_timer = setTimeout(async () => {
-      if (this.sync) {
-        if (this.folder_path !== '' && this.selected_file !== '') {
-          const path = this.folder_path + this.slash + this.selected_file;
-          try {
-            await window.electronAPI.writeTextFile(path, JSON.stringify(this.texture));
-
-            if (this.texture.save_albedo) {
-              await this.mixTexture('albedo');
-            }
-            if (this.texture.save_roughness) {
-              await this.mixTexture('roughness');
-            }
-            if (this.texture.save_metallic) {
-              await this.mixTexture('metallic');
-            }
-            if (this.texture.save_emission) {
-              await this.mixTexture('emission');
-            }
-            if (this.texture.save_clearcoat) {
-              await this.mixTexture('clearcoat');
-            }
-            if (this.texture.save_clearcoat_roughness) {
-              await this.mixTexture('clearcoat_roughness');
-            }
-            if (this.texture.save_mrc) {
-              await this.mixTexture('mrc');
-            }
-          } catch (error) {
-            console.error('Error saving file:', error);
+    this.save_timer = setTimeout(() => {
+      // Serialize writes; superseded queued saves are skipped before copying canvases.
+      state.pending = state.pending.then(async () => {
+        if (!isCurrent()) return;
+        try {
+          const snapshot = captureExportSnapshot(this, isCurrent);
+          const path = snapshot.folder_path + snapshot.slash + snapshot.selected_file;
+          await window.electronAPI.writeTextFile(path, snapshot.serializedTexture);
+          // Albedo mixing updates emission, so preserve this export order.
+          for (const channel of MATERIAL_CHANNELS) {
+            if (snapshot.texture[`save_${channel}`]) await this.mixTexture.call(snapshot, channel);
           }
+        } catch (error) {
+          console.error('Error saving file:', error);
         }
-      }
-    }, upd_int);
+      });
+    }, updateInterval);
   },
   async newTexture() {
     this.selected_file = this.texture_name + '.json';
     this.texture_name = '';
     const path = this.folder_path + this.slash + this.selected_file;
-    //await writeTextFile(path, '');
     await window.electronAPI.writeTextFile(path, '');
     this.getFiles();
   },
@@ -242,7 +265,7 @@ export const fileMethods = {
     if (!texture.max_item_size) {
       texture.max_item_size = 200;
     }
-    if (!texture.mix_preview) {
+    if (texture.mix_preview == null) {
       texture.mix_preview = 1;
     }
     if (!texture.update_interval) {
@@ -251,29 +274,11 @@ export const fileMethods = {
     if (!texture.zoom_speed) {
       texture.zoom_speed = 50;
     }
-    if (!texture.center_locked) {
+    if (texture.center_locked == null) {
       texture.center_locked = true;
     }
-    if (texture.save_albedo === undefined) {
-      texture.save_albedo = 1;
-    }
-    if (texture.save_roughness === undefined) {
-      texture.save_roughness = 1;
-    }
-    if (texture.save_metallic === undefined) {
-      texture.save_metallic = 1;
-    }
-    if (texture.save_emission === undefined) {
-      texture.save_emission = 1;
-    }
-    if (texture.save_clearcoat === undefined) {
-      texture.save_clearcoat = 1;
-    }
-    if (texture.save_clearcoat_roughness === undefined) {
-      texture.save_clearcoat_roughness = 1;
-    }
-    if (texture.save_mrc === undefined) {
-      texture.save_mrc = 0;
+    for (const channel of MATERIAL_CHANNELS) {
+      texture[`save_${channel}`] ??= channel === 'mrc' ? 0 : 1;
     }
     if (!Array.isArray(texture.layers)) {
       texture.layers = [];

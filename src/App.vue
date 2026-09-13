@@ -32,6 +32,33 @@
 
       <div class="dragger"></div>
 
+      <div class="titlebar-search">
+        <input
+          ref="layerSearchInput"
+          v-model="layerSearchQuery"
+          type="text"
+          placeholder="Search layers…"
+          aria-label="Search layers and folders"
+          autocomplete="off"
+          spellcheck="false"
+          @keydown.stop
+          @keydown.esc.prevent="layerSearchQuery = ''"
+        />
+        <button
+          v-if="layerSearchQuery"
+          type="button"
+          class="titlebar-search-clear"
+          aria-label="Clear search"
+          title="Clear search"
+          @click="
+            layerSearchQuery = '';
+            $refs.layerSearchInput.focus();
+          "
+        >
+          ×
+        </button>
+      </div>
+
       <div class="frame-buttons" aria-label="Window controls">
         <button
           class="window-control"
@@ -622,6 +649,7 @@
       >
         <LayersPanel
           ref="layersPanel"
+          :searchQuery="layerSearchQuery"
           :items="texture.items"
           :layers="texture.layers"
           :step="texture.step"

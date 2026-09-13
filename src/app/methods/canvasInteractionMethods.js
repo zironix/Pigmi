@@ -287,56 +287,20 @@ export const canvasInteractionMethods = {
       }
     }
     if (this.is_pressed && this.selected !== false) {
+      const item = this.texture.items[this.selected];
+      if (!item) return;
       this.is_moving = true;
-
-      if (this.texture.items[this.selected].type === 'sg') {
-        const old_x = this.texture.items[this.selected].x * this.finalZoom;
-        const old_y = this.texture.items[this.selected].y * this.finalZoom;
-
-        this.texture.items[this.selected].x =
-          Math.floor(
-            (event.offsetX -
-              this.selected_offset.x * this.texture.items[this.selected].size * this.finalZoom) /
-              (this.texture.step * this.finalZoom),
-          ) * this.texture.step;
-
-        this.texture.items[this.selected].y =
-          Math.floor(
-            (event.offsetY -
-              this.selected_offset.y * this.texture.items[this.selected].size * this.finalZoom) /
-              (this.texture.step * this.finalZoom),
-          ) * this.texture.step;
-
-        if (
-          old_x != this.texture.items[this.selected].x ||
-          old_y != this.texture.items[this.selected].y
-        ) {
-          this.draw();
-        }
-      } else {
-        const old_x = this.texture.items[this.selected].x * this.finalZoom;
-        const old_y = this.texture.items[this.selected].y * this.finalZoom;
-
-        this.texture.items[this.selected].x =
-          Math.floor(
-            (event.offsetX -
-              this.selected_offset.x * this.texture.items[this.selected].size[0] * this.finalZoom) /
-              (this.texture.step * this.finalZoom),
-          ) * this.texture.step;
-
-        this.texture.items[this.selected].y =
-          Math.floor(
-            (event.offsetY -
-              this.selected_offset.y * this.texture.items[this.selected].size[1] * this.finalZoom) /
-              (this.texture.step * this.finalZoom),
-          ) * this.texture.step;
-
-        if (
-          old_x != this.texture.items[this.selected].x ||
-          old_y != this.texture.items[this.selected].y
-        ) {
-          this.draw();
-        }
+      const [width, height] = Array.isArray(item.size) ? item.size : [item.size, item.size];
+      const step = Number(this.texture.step) || 1;
+      const x =
+        Math.floor((event.offsetX / this.finalZoom - this.selected_offset.x * width) / step) * step;
+      const y =
+        Math.floor((event.offsetY / this.finalZoom - this.selected_offset.y * height) / step) *
+        step;
+      if (item.x !== x || item.y !== y) {
+        item.x = x;
+        item.y = y;
+        this.draw();
       }
     }
   },

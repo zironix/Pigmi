@@ -60,6 +60,20 @@ There are two canvas item types:
 Shared bounds and hit-testing rules live in `src/utils/canvasItemGeometry.js`. Use those helpers
 instead of reproducing the stepped-gradient formula in UI code.
 
+Rendering calculations and material-channel drawing live in `src/utils/canvasRendering.js`;
+`canvasRenderMethods.js` coordinates them. Color interpolation is shared across preview, albedo,
+and emission. Adjacent stepped transitions share a cell, including its alpha overdraw.
+
+Layer moves and clipboard cloning live in `src/utils/layerTreeOperations.js`. Moves validate their
+destination before mutation, and the undo callback runs before removing source nodes. Search
+expansion lives in `src/utils/layerSearch.js` and does not mutate saved folder state until an
+interacted path needs to stay open after clearing the query.
+
+Autosave serializes writes and skips superseded queued revisions. Each export uses private canvas
+copies and captured document settings, so asynchronous mixing cannot combine different editor
+states. Palette-generation responses are similarly tied to the original item and discarded after
+newer requests, color edits, deletion, or document replacement.
+
 ## Naming that should not be "cleaned up"
 
 Saved project data uses historical `snake_case` fields such as `center_locked`, `color_offsets`, and

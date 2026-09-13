@@ -1072,3 +1072,51 @@ body {
 .new-file:hover {
   background: #343434;
 }
+
+.top-controls {
+  .titlebar-search {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(320px, calc(100% - 480px));
+    -webkit-app-region: no-drag;
+    z-index: 2;
+    input {
+      box-sizing: border-box;
+      width: 100%;
+      height: 28px;
+      padding: 4px 28px 4px 8px;
+      border: 1px solid #3b3d41;
+      border-radius: 4px;
+      background: #1a1b1e;
+      color: #ced0d6;
+      font:
+        12px 'JetBrains Mono',
+        monospace;
+      &:focus {
+        outline: 1px solid #ef0a62;
+        outline-offset: -1px;
+      }
+    }
+  }
+  .titlebar-search-clear {
+    position: absolute;
+    right: 2px;
+    top: 2px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: #929293;
+    font-size: 17px;
+    cursor: pointer;
+    &:hover,
+    &:focus-visible {
+      background: #333539;
+      color: #ced0d6;
+    }
+  }
+}

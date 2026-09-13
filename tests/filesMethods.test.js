@@ -22,6 +22,28 @@ afterEach(() => {
 });
 
 describe('file loading', () => {
+  it('preserves explicitly disabled project settings while filling legacy defaults', () => {
+    const texture = {
+      items: [],
+      mix_preview: 0,
+      center_locked: false,
+      save_albedo: 0,
+      save_emission: 0,
+    };
+    fileMethods.fixTexture(texture);
+    expect(texture).toMatchObject({
+      mix_preview: 0,
+      center_locked: false,
+      save_albedo: 0,
+      save_emission: 0,
+      save_roughness: 1,
+      save_mrc: 0,
+      layers: [],
+    });
+    const legacy = fileMethods.fixTexture({ items: [] });
+    expect(legacy).toMatchObject({ mix_preview: 1, center_locked: true });
+  });
+
   it('waits for canvas dimensions to update before drawing a loaded document', async () => {
     const sourceTexture = {
       width: 512,

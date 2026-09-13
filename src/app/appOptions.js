@@ -46,6 +46,7 @@ export default {
       is_moving: false,
       is_color_changing: false,
       search: '',
+      layerSearchQuery: '',
       // This legacy UI uses `false` to mean that no texture item is selected.
       selected: false,
       ls: null,
@@ -247,6 +248,9 @@ export default {
     },
   },
   watch: {
+    layerSearchQuery(query) {
+      if (query.trim()) this.current_tab = 'search';
+    },
     texture: {
       handler() {
         if (this.selected !== false) {
@@ -470,6 +474,7 @@ export default {
     window.removeEventListener('mouseup', this.onPanEnd);
     clearTimeout(this.trackpadPanEndTimer);
     clearTimeout(this.wheelGestureResetTimer);
+    clearTimeout(this.save_timer);
     document.body.style.cursor = '';
   },
 };

@@ -1,5 +1,7 @@
 import LinearColorInterpolator from '../../plugins/linearColorInterpolator';
 
+const pendingGenerations = new WeakMap();
+
 export const paletteMethods = {
   generateAdjacencyMatrix(n, type = 'balanced') {
     const mat = Array.from({ length: n }, () => Array(n).fill(0));
@@ -111,72 +113,60 @@ export const paletteMethods = {
     return mat.flat().map(String);
   },
   async generateColors() {
-    const colors_count = this.texture.items[this.selected].colors.length;
-    const palette = [];
-    for (let i = 0; i < colors_count; i++) {
-      if (
-        this.texture.items[this.selected].colors[i].locked !== undefined &&
-        this.texture.items[this.selected].colors[i].locked
-      ) {
-        const rgba = this.texture.items[this.selected].colors[i].rgba;
-        const hex = LinearColorInterpolator.RGBToHex(`rgb(${rgba.r}, ${rgba.g}, ${rgba.b})`);
-        palette.push(hex);
-      } else {
-        palette.push('-');
-      }
-    }
-
-    const json_data = {
-      mode: this.texture.generation.mode, // diffusion, diffusion or random
-      num_colors: colors_count, // max 12, min 2
-      temperature: this.texture.generation.temperature, // max 2.4, min 0
-      num_results: 1, // max 50 for transformer, 5 for diffusion
-      adjacency: this.generateAdjacencyMatrix(colors_count, this.texture.generation.adjacency), // nxn adjacency matrix as a flat array of strings
-      palette, // locked colors as hex codes, or '-' if blank
+    const texture = this.texture;
+    const item = texture.items[this.selected];
+    if (!item) return;
+    const request = {};
+    const originalColors = JSON.stringify(item.colors);
+    pendingGenerations.set(item, request);
+    const palette = item.colors.map((color) => {
+      if (!color.locked) return '-';
+      const { r, g, b } = color.rgba;
+      return LinearColorInterpolator.RGBToHex(`rgb(${r}, ${g}, ${b})`);
+    });
+    const payload = {
+      mode: texture.generation.mode,
+      num_colors: palette.length,
+      temperature: texture.generation.temperature,
+      num_results: 1,
+      adjacency: this.generateAdjacencyMatrix(palette.length, texture.generation.adjacency),
+      palette,
     };
 
     try {
-      const res = await fetch('https://api.huemint.com/color', {
+      const response = await fetch('https://api.huemint.com/color', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(json_data),
+        body: JSON.stringify(payload),
       });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const generatedPalette = data.results?.[0]?.palette;
+      if (!Array.isArray(generatedPalette) || generatedPalette.length !== palette.length) return;
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = await res.json();
-
+      // A response belongs to the original item, even if selection/order changed.
+      // Discard it after document replacement, deletion, newer requests, or color edits.
       if (
-        data.results &&
-        data.results[0] &&
-        data.results[0].palette &&
-        data.results[0].palette.length === colors_count
-      ) {
-        // Replace nested objects so Vue observes the generated palette immediately.
-        const updatedColors = this.texture.items[this.selected].colors.map((color, i) => {
-          if (i < data.results[0].palette.length) {
-            const hexColor = data.results[0].palette[i];
-            const hsva = LinearColorInterpolator.hexAToHSVA(hexColor + 'ff');
-            const rgba = LinearColorInterpolator.hexAToRGBA(hexColor + 'ff');
+        this.texture !== texture ||
+        !texture.items.includes(item) ||
+        pendingGenerations.get(item) !== request ||
+        JSON.stringify(item.colors) !== originalColors
+      )
+        return;
 
-            return {
-              ...color,
-              hsva: { h: hsva.h, s: hsva.s, v: hsva.v, a: hsva.a },
-              rgba: { r: rgba.r, g: rgba.g, b: rgba.b, a: rgba.a },
-            };
-          }
-          return color;
-        });
-
-        const updatedItem = {
-          ...this.texture.items[this.selected],
-          colors: updatedColors,
-        };
-
-        this.texture.items[this.selected] = updatedItem;
-      }
-    } catch (err) {
-      console.error('Failed to generate colors:', err);
+      const colors = item.colors.map((color, index) => {
+        if (color.locked) return color;
+        const rgba = LinearColorInterpolator.hexAToRGBA(generatedPalette[index]);
+        const hsva = LinearColorInterpolator.hexAToHSVA(generatedPalette[index]);
+        if (!rgba || !hsva) throw new Error('Generator returned an invalid color');
+        const alpha = color.rgba.a;
+        return { ...color, rgba: { ...rgba, a: alpha }, hsva: { ...hsva, a: alpha } };
+      });
+      item.colors = colors;
+    } catch (error) {
+      console.error('Failed to generate colors:', error);
+    } finally {
+      if (pendingGenerations.get(item) === request) pendingGenerations.delete(item);
     }
   },
 };

@@ -1,27 +1,9 @@
-function getSteppedGradientGrid(item) {
-  let columns = 1;
-  let rows = 1;
-
-  if (!item.direction || !item.steps || item.steps <= 1) {
-    return { columns, rows };
-  }
-
-  let colorTransitions = Math.max((item.colors?.length ?? 0) - 1, 1);
-  let blackToWhiteSteps = 0;
-
-  if (item.color_mode === 'black_to_white') {
-    colorTransitions = 1;
-    blackToWhiteSteps = item.steps + 1;
-  }
-
-  const cellCount = item.steps * colorTransitions + blackToWhiteSteps;
-  if (item.direction === 'horizontal') {
-    columns = cellCount;
-  } else {
-    rows = cellCount;
-  }
-
-  return { columns, rows };
+export function getSteppedGradientCellCount(item) {
+  const steps = Math.max(1, Number(item.steps) || 1);
+  if (item.color_mode === 'black_to_white') return steps * 2 + 1;
+  const colors = Math.max(1, item.colors?.length || 1);
+  // Adjacent transitions paint their shared endpoint into the same cell.
+  return colors > 1 ? (colors - 1) * (steps - 1) + 1 : steps;
 }
 
 /**
@@ -40,7 +22,9 @@ export function getCanvasItemBounds(item) {
 
   if (item.type === 'sg') {
     const size = Number(item.size) || 0;
-    const { columns, rows } = getSteppedGradientGrid(item);
+    const count = getSteppedGradientCellCount(item);
+    const columns = item.direction === 'horizontal' ? count : 1;
+    const rows = item.direction === 'horizontal' ? 1 : count;
     return { x, y, width: size * columns, height: size * rows };
   }
 
@@ -93,9 +77,9 @@ export function getCanvasItemCellOffset(item, x, y) {
     if (size <= 0) return { x: 0, y: 0 };
 
     if (item.direction === 'horizontal') {
-      return { x: Math.ceil((x - bounds.x) / size) - 1, y: 0 };
+      return { x: Math.max(0, Math.ceil((x - bounds.x) / size) - 1), y: 0 };
     }
-    return { x: 0, y: Math.ceil((y - bounds.y) / size) - 1 };
+    return { x: 0, y: Math.max(0, Math.ceil((y - bounds.y) / size) - 1) };
   }
 
   if (bounds.width <= 0 || bounds.height <= 0) {
@@ -103,7 +87,7 @@ export function getCanvasItemCellOffset(item, x, y) {
   }
 
   return {
-    x: Math.ceil((x - bounds.x) / bounds.width) - 1,
-    y: Math.ceil((y - bounds.y) / bounds.height) - 1,
+    x: Math.max(0, Math.ceil((x - bounds.x) / bounds.width) - 1),
+    y: Math.max(0, Math.ceil((y - bounds.y) / bounds.height) - 1),
   };
 }

@@ -1,3 +1,4 @@
+import { getSteppedGradientCellCount } from '../utils/canvasItemGeometry';
 import LinearColorInterpolator from '../plugins/linearColorInterpolator.js';
 
 export function clamp(value, min, max) {
@@ -464,19 +465,10 @@ export function computeItemBounds(item) {
     return { w: Math.max(1, w), h: Math.max(1, h) };
   }
   const baseSize = Math.max(1, toNumber(item.size, 1));
-  const steps = Math.max(1, toNumber(item.steps, 1));
-  const colorsCount = Math.max(1, Array.isArray(item.colors) ? item.colors.length : 1);
-  let xSteps = 1;
-  let ySteps = 1;
-  if (item.color_mode === 'black_to_white') {
-    if (item.direction === 'horizontal') xSteps = steps * 2 + 1;
-    else ySteps = steps * 2 + 1;
-  } else if (item.direction === 'horizontal') {
-    xSteps = Math.max(1, (colorsCount - 1) * steps);
-  } else {
-    ySteps = Math.max(1, (colorsCount - 1) * steps);
-  }
-  return { w: baseSize * xSteps, h: baseSize * ySteps };
+  const cellCount = getSteppedGradientCellCount(item);
+  return item.direction === 'horizontal'
+    ? { w: baseSize * cellCount, h: baseSize }
+    : { w: baseSize, h: baseSize * cellCount };
 }
 
 /**

@@ -329,6 +329,7 @@ export default {
     sliderWidth: 157,
     color_mode: 'hsva',
     ignoreNextUpdate: false,
+    activeDrag: null,
 
     color: {
       rgb: { r: 0, g: 0, b: 0 },
@@ -354,13 +355,13 @@ export default {
       return (this.color.hsv.h * 100) / 360 + '%';
     },
     alphaLeft() {
-      return (this.color.alpha * 100 * 100) / 100 + '%';
+      return `${this.color.alpha * 100}%`;
     },
     svLeft() {
-      return (this.color.hsv.s * 100) / 100 + '%';
+      return `${this.color.hsv.s}%`;
     },
     svTop() {
-      return 100 - (this.color.hsv.v * 100) / 100 + '%';
+      return `${100 - this.color.hsv.v}%`;
     },
     bgColor() {
       return `hsla(${this.color.hsv.h}, 100%, 50%)`;
@@ -375,6 +376,7 @@ export default {
   },
   beforeUnmount() {
     this.emitter.off('set', this.set);
+    this.stopDrag();
   },
   mounted() {
     this.color.hsv = { h: this.hsva.h, s: this.hsva.s, v: this.hsva.v };
@@ -438,9 +440,7 @@ export default {
 
     hueMouseDown(event) {
       event.preventDefault();
-      //document.body.requestPointerLock();
-      document.onmousemove = this.hueDrag;
-      document.onmouseup = this.stopDrag;
+      this.startDrag(this.hueDrag);
 
       this.positions.huePos = event.offsetX;
       this.color.hsv.h = Math.ceil(
@@ -465,8 +465,7 @@ export default {
 
     alphaMouseDown(event) {
       event.preventDefault();
-      document.onmousemove = this.alphaDrag;
-      document.onmouseup = this.stopDrag;
+      this.startDrag(this.alphaDrag);
 
       this.positions.alphaPos = event.offsetX;
       this.color.alpha = parseFloat(
@@ -495,8 +494,7 @@ export default {
 
     svMouseDown(event) {
       event.preventDefault();
-      document.onmousemove = this.svDrag;
-      document.onmouseup = this.stopDrag;
+      this.startDrag(this.svDrag);
 
       this.positions.saturationPos = event.offsetX;
       this.positions.valuePos = event.offsetY;
@@ -531,113 +529,80 @@ export default {
       }
       this.makeColors();
     },
+    startDrag(handler) {
+      this.stopDrag();
+      this.activeDrag = handler;
+      document.addEventListener('mousemove', handler);
+      document.addEventListener('mouseup', this.stopDrag);
+    },
     stopDrag() {
-      document.onmouseup = null;
-      document.onmousemove = null;
-      document.exitPointerLock();
+      if (!this.activeDrag) return;
+      document.removeEventListener('mousemove', this.activeDrag);
+      document.removeEventListener('mouseup', this.stopDrag);
+      this.activeDrag = null;
     },
 
-    makeColors(space) {
+    makeColors(space = 'hsv', emitUpdates = true) {
       this.ignoreNextUpdate = true;
-      if (space === undefined) space = 'hsv';
+      try {
+        if (space === 'hsv') {
+          const hsl = this.hsv2hsl(this.color.hsv.h, this.color.hsv.s, this.color.hsv.v);
+          this.color.hsl = { h: parseInt(hsl[0]), s: parseInt(hsl[1]), l: parseInt(hsl[2]) };
 
-      if (space === 'hsv') {
-        const hsl = this.hsv2hsl(this.color.hsv.h, this.color.hsv.s, this.color.hsv.v);
-        this.color.hsl = { h: parseInt(hsl[0]), s: parseInt(hsl[1]), l: parseInt(hsl[2]) };
+          const rgba = LinearColorInterpolator.HSLAToRGBA(
+            `hsla(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%, 1)`,
+          );
+          this.color.rgb = { r: rgba.r, g: rgba.g, b: rgba.b };
 
-        const rgba = LinearColorInterpolator.HSLAToRGBA(
-          `hsla(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%, 1)`,
-        );
-        this.color.rgb = { r: rgba.r, g: rgba.g, b: rgba.b };
-
-        this.color.hex = LinearColorInterpolator.HSLAToHexA(
-          `hsla(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%, ${this.color.alpha})`,
-        );
-        this.$emit('update:rgba', { r: rgba.r, g: rgba.g, b: rgba.b, a: this.color.alpha });
-        this.$emit('update:hsva', {
-          h: this.color.hsv.h,
-          s: this.color.hsv.s,
-          v: this.color.hsv.v,
-          a: this.color.alpha,
-        });
-
-        setTimeout(() => {
-          this.ignoreNextUpdate = false;
-        }, 0);
-      }
-      if (space === 'hsl') {
-        const hsv = this.hsl2hsv(
-          parseInt(this.color.hsl.h),
-          parseInt(this.color.hsl.s),
-          parseInt(this.color.hsl.l),
-        );
-        this.color.hsv = { h: parseInt(hsv[0]), s: parseInt(hsv[1]), v: parseInt(hsv[2]) };
-
-        const rgba = LinearColorInterpolator.HSLAToRGBA(
-          `hsla(${this.color.hsl.h}, ${this.color.hsl.s}%, ${this.color.hsl.l}%, 1)`,
-        );
-        this.color.rgb = { r: rgba.r, g: rgba.g, b: rgba.b };
-
-        this.color.hex = LinearColorInterpolator.HSLAToHexA(
-          `hsla(${this.color.hsl.h}, ${this.color.hsl.s}%, ${this.color.hsl.l}%, ${this.color.alpha})`,
-        );
-        this.$emit('update:rgba', { r: rgba.r, g: rgba.g, b: rgba.b, a: this.color.alpha });
-        this.$emit('update:hsva', {
-          h: this.color.hsv.h,
-          s: this.color.hsv.s,
-          v: this.color.hsv.v,
-          a: this.color.alpha,
-        });
-
-        setTimeout(() => {
-          this.ignoreNextUpdate = false;
-        }, 0);
-      }
-      if (space === 'rgb') {
-        const hsl = LinearColorInterpolator.RGBAToHSLA(
-          `rgba(${this.color.rgb.r}, ${this.color.rgb.g}, ${this.color.rgb.b}, 1)`,
-        );
-        this.color.hsl = { h: parseInt(hsl.h), s: parseInt(hsl.s), l: parseInt(hsl.l) };
-
-        const hsv = this.hsl2hsv(parseInt(hsl.h), parseInt(hsl.s), parseInt(hsl.l));
-        this.color.hsv = { h: parseInt(hsv[0]), s: parseInt(hsv[1]), v: parseInt(hsv[2]) };
-
-        this.color.hex = LinearColorInterpolator.HSLAToHexA(
-          `hsla(${hsl.h}, ${hsl.s}%, ${hsl.l}%, ${this.color.alpha})`,
-        );
-        this.$emit('update:rgba', {
-          r: this.color.rgb.r,
-          g: this.color.rgb.g,
-          b: this.color.rgb.b,
-          a: this.color.alpha,
-        });
-        this.$emit('update:hsva', {
-          h: this.color.hsv.h,
-          s: this.color.hsv.s,
-          v: this.color.hsv.v,
-          a: this.color.alpha,
-        });
-
-        setTimeout(() => {
-          this.ignoreNextUpdate = false;
-        }, 0);
-      }
-      if (space === 'hex') {
-        var pattern1 = new RegExp('#');
-        if (!pattern1.test(this.color.hex)) {
-          this.color.hex = '#' + this.color.hex;
+          this.color.hex = LinearColorInterpolator.HSLAToHexA(
+            `hsla(${hsl[0]}, ${hsl[1]}%, ${hsl[2]}%, ${this.color.alpha})`,
+          );
         }
-        if (this.color.hex.length === 8) {
-          this.color.hex = this.color.hex + 'f';
-        }
-        if (this.color.hex.length === 7) {
-          this.color.hex = this.color.hex + 'ff';
-        }
+        if (space === 'hsl') {
+          const hsv = this.hsl2hsv(
+            parseInt(this.color.hsl.h),
+            parseInt(this.color.hsl.s),
+            parseInt(this.color.hsl.l),
+          );
+          this.color.hsv = { h: parseInt(hsv[0]), s: parseInt(hsv[1]), v: parseInt(hsv[2]) };
 
-        const hsla = LinearColorInterpolator.hexAToHSLA(this.color.hex);
-        const hsva = LinearColorInterpolator.hexAToHSVA(this.color.hex);
-        const rgba = LinearColorInterpolator.hexAToRGBA(this.color.hex);
-        if (typeof hsla === 'object' && typeof hsva === 'object' && typeof rgba === 'object') {
+          const rgba = LinearColorInterpolator.HSLAToRGBA(
+            `hsla(${this.color.hsl.h}, ${this.color.hsl.s}%, ${this.color.hsl.l}%, 1)`,
+          );
+          this.color.rgb = { r: rgba.r, g: rgba.g, b: rgba.b };
+
+          this.color.hex = LinearColorInterpolator.HSLAToHexA(
+            `hsla(${this.color.hsl.h}, ${this.color.hsl.s}%, ${this.color.hsl.l}%, ${this.color.alpha})`,
+          );
+        }
+        if (space === 'rgb') {
+          const hsl = LinearColorInterpolator.RGBAToHSLA(
+            `rgba(${this.color.rgb.r}, ${this.color.rgb.g}, ${this.color.rgb.b}, 1)`,
+          );
+          this.color.hsl = { h: parseInt(hsl.h), s: parseInt(hsl.s), l: parseInt(hsl.l) };
+
+          const hsv = this.hsl2hsv(parseInt(hsl.h), parseInt(hsl.s), parseInt(hsl.l));
+          this.color.hsv = { h: parseInt(hsv[0]), s: parseInt(hsv[1]), v: parseInt(hsv[2]) };
+
+          this.color.hex = LinearColorInterpolator.HSLAToHexA(
+            `hsla(${hsl.h}, ${hsl.s}%, ${hsl.l}%, ${this.color.alpha})`,
+          );
+        }
+        if (space === 'hex') {
+          if (!this.color.hex.startsWith('#')) {
+            this.color.hex = '#' + this.color.hex;
+          }
+          if (this.color.hex.length === 8) {
+            this.color.hex = this.color.hex + 'f';
+          }
+          if (this.color.hex.length === 7) {
+            this.color.hex = this.color.hex + 'ff';
+          }
+
+          const hsla = LinearColorInterpolator.hexAToHSLA(this.color.hex);
+          const hsva = LinearColorInterpolator.hexAToHSVA(this.color.hex);
+          const rgba = LinearColorInterpolator.hexAToRGBA(this.color.hex);
+          if (!hsla || !hsva || !rgba) return;
           this.color.hsl = {
             h: parseInt(hsla.h),
             s: parseInt(hsla.s),
@@ -654,24 +619,17 @@ export default {
             b: parseInt(rgba.b),
           };
           this.color.alpha = parseFloat(hsva.a);
-
-          this.$emit('update:rgba', {
-            r: this.color.rgb.r,
-            g: this.color.rgb.g,
-            b: this.color.rgb.b,
-            a: this.color.alpha,
-          });
-          this.$emit('update:hsva', {
-            h: this.color.hsv.h,
-            s: this.color.hsv.s,
-            v: this.color.hsv.v,
-            a: this.color.alpha,
-          });
-
-          setTimeout(() => {
-            this.ignoreNextUpdate = false;
-          }, 0);
         }
+        if (emitUpdates) {
+          this.$emit('update:rgba', { ...this.color.rgb, a: this.color.alpha });
+          this.$emit('update:hsva', { ...this.color.hsv, a: this.color.alpha });
+        }
+      } finally {
+        // Release the guard after Vue has processed our emitted prop updates,
+        // including when a partially entered HEX value cannot be parsed yet.
+        this.$nextTick(() => {
+          this.ignoreNextUpdate = false;
+        });
       }
     },
     hsv2hsl(hsvH, hsvS, hsvV) {
@@ -737,6 +695,7 @@ export default {
 
         this.color.hsv = { h: newVal.h, s: newVal.s, v: newVal.v };
         this.color.alpha = newVal.a;
+        this.makeColors('hsv', false);
       },
       deep: true,
       immediate: true,

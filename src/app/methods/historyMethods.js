@@ -78,7 +78,7 @@ export const historyMethods = {
       this.texture = JSON.parse(this.undo_array[this.undo_array.length - 1].texture);
       applyCollapsedState(this.texture?.layers);
       this.selected = this.undo_array[this.undo_array.length - 1].selected;
-      if (!this.selected) {
+      if (this.selected === false) {
         if (this.current_tab !== 'search') {
           this.current_tab = 'texture';
         }

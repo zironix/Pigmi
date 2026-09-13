@@ -13,11 +13,11 @@
     @contextmenu.stop.prevent
     @dblclick.stop.prevent="onDblClick"
   >
-    <div class="main-info">
+    <div class="main-info" @pointerdown="search?.rememberInteraction(props.item)">
       <i
         v-if="props.item.type === 'folder'"
         :class="[
-          props.item.collapsed ? 'las la-folder' : 'las la-folder-open',
+          isCollapsed ? 'las la-folder' : 'las la-folder-open',
           { 'folder-empty': isFolderEmpty },
         ]"
         @click.stop.prevent="toggleCollapse"
@@ -59,14 +59,16 @@
       </div>
     </div>
 
-    <div class="childs" v-if="!(props.item.type === 'folder' && props.item.collapsed)">
+    <div class="childs" v-if="!(props.item.type === 'folder' && isCollapsed)">
       <LayersItem
         v-for="child in props.item.childs"
         :item="child"
         :items="props.items"
+        :itemsById="props.itemsById"
         :rootItems="props.rootItems"
         :moveItem="props.moveItem"
         :toggleVisibility="props.toggleVisibility"
+        :onStructureChanged="props.onStructureChanged"
         :key="child.id"
       />
       <div
@@ -86,12 +88,15 @@
 import LayersItem from './LayersItem.vue';
 import { useLayersStore, applyLayerSelection } from '../stores/layers';
 import { previewCssFromItem } from '../buildTree';
+import { collectLayerItemIds, findLayerNodeById, isLayerAncestor } from '../utils/layerPasteTarget';
 import { isPlatformPrimaryModifier } from '../utils/inputModifiers';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, inject, nextTick, onBeforeUnmount, ref } from 'vue';
+import { layerSearchKey } from '../utils/layerSearch';
 
 const props = defineProps<{
   item: any;
   items: any;
+  itemsById?: Map<any, any>;
   rootItems: any;
   moveItem: any;
   toggleVisibility: any;
@@ -99,9 +104,16 @@ const props = defineProps<{
 }>();
 
 const ls: any = useLayersStore();
-const previewCss = ref('background:transparent;');
-
-const isSelected = ref(false);
+const search = inject(layerSearchKey, null);
+const isCollapsed = computed(() => search?.isCollapsed(props.item) ?? !!props.item.collapsed);
+const previewCss = computed(() => {
+  if (props.item.type !== 'item') return 'transparent';
+  const item =
+    props.itemsById?.get(props.item.id) ??
+    props.items.find((candidate) => candidate.id === props.item.id);
+  return item ? previewCssFromItem(item) : 'transparent';
+});
+const isSelected = computed(() => ls.selected.includes(props.item.id));
 const isEditing = ref(false);
 const editName = ref('');
 const editInput = ref<HTMLInputElement | null>(null);
@@ -111,24 +123,6 @@ const isFolderEmpty = computed(() => {
   if (props.item.type !== 'folder') return false;
   return !Array.isArray(props.item.childs) || props.item.childs.length === 0;
 });
-
-watch(
-  () => props.items.find((item) => item.id === props.item.id),
-  (resultItem) => {
-    if (props.item.type === 'item' && resultItem) {
-      previewCss.value = previewCssFromItem(resultItem);
-    }
-  },
-  { immediate: true, deep: true },
-);
-
-watch(
-  () => ls.selected,
-  () => {
-    isSelected.value = ls.selected.includes(props.item.id);
-  },
-  { immediate: true, deep: true },
-);
 
 const itemClasses = computed(() => {
   const isHoveredItem =
@@ -143,6 +137,7 @@ const itemClasses = computed(() => {
     'zone-bottom': isHoveredItem && ls.zone === 'bottom',
     'is-dragging': isHoveredItem && ls.is_dragging,
     'is-selected': isSelected.value,
+    'is-search-match': search?.results.value.matches.has(props.item.id) ?? false,
     'contains-active-item': isFolderInActivePath.value,
   };
 });
@@ -151,24 +146,8 @@ const isFolderInActivePath = computed(() => {
   if (props.item.type !== 'folder') return false;
   if (ls.active_type !== 'item') return false;
   if (ls.active_id === null || ls.active_id === undefined) return false;
-  return hasItemInSubtree(props.item, ls.active_id);
+  return isLayerAncestor(props.item, ls.active_id);
 });
-
-function hasItemInSubtree(node, targetId) {
-  if (!node) return false;
-  if (node.type === 'item') {
-    return node.id === targetId;
-  }
-  if (!Array.isArray(node.childs) || !node.childs.length) {
-    return false;
-  }
-  for (const child of node.childs) {
-    if (hasItemInSubtree(child, targetId)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 function onDragStart($event) {
   if (ls.renaming_id !== null) {
@@ -176,6 +155,7 @@ function onDragStart($event) {
     return;
   }
   ls.dragged_item = props.item;
+  search?.rememberInteraction(props.item);
   ls.is_dragging = true;
   if ($event && $event.dataTransfer) {
     $event.dataTransfer.effectAllowed = 'move';
@@ -218,6 +198,8 @@ function onDragLeave(event: DragEvent) {
   }
 }
 function onDrop($event) {
+  if (!ls.dragged_item || !ls.hovered_item || isInvalidDropTarget(props.item, ls.dragged_item))
+    return;
   const dropZone = resolveDropZoneForDrop($event);
   props.moveItem(ls.dragged_item.id, ls.hovered_item.id, dropZone);
   ls.zone = null;
@@ -249,7 +231,7 @@ function updateZone(event: DragEvent, is_self) {
   const isExpandedFolder =
     props.item &&
     props.item.type === 'folder' &&
-    props.item.collapsed !== true &&
+    !isCollapsed.value &&
     Array.isArray(props.item.childs) &&
     props.item.childs.length > 0;
 
@@ -303,19 +285,11 @@ function resolveDropZoneForDrop(event: DragEvent) {
 function isInvalidDropTarget(targetNode, draggedNode) {
   if (!targetNode || !draggedNode) return false;
   if (targetNode.id === draggedNode.id) return true;
-  return isDescendant(draggedNode, targetNode.id);
-}
-
-function isDescendant(rootNode, candidateId) {
-  if (!rootNode || !Array.isArray(rootNode.childs)) return false;
-  for (const child of rootNode.childs) {
-    if (child.id === candidateId) return true;
-    if (isDescendant(child, candidateId)) return true;
-  }
-  return false;
+  return isLayerAncestor(draggedNode, targetNode.id);
 }
 
 function onClick(e: MouseEvent) {
+  search?.rememberInteraction(props.item);
   applyClickSelection(e);
 }
 
@@ -333,7 +307,7 @@ function applyClickSelection(e: MouseEvent) {
 
   if (!isToggleSelection && !e.shiftKey && props.item.type === 'folder') {
     const ids = [];
-    collectItemIdsInOrder(props.item, ids);
+    collectLayerItemIds(props.item, ids);
     if (!ids.length) {
       applyLayerSelection(ls, [props.item.id], 'folder');
       ls.last_clicked_id = props.item.id;
@@ -362,8 +336,8 @@ function applyClickSelection(e: MouseEvent) {
       return;
     }
     const rootList = props.rootItems || [];
-    const anchorInfo = findNodeInTree(rootList, anchorId);
-    const targetInfo = findNodeInTree(rootList, props.item.id);
+    const anchorInfo = findLayerNodeById(rootList, anchorId);
+    const targetInfo = findLayerNodeById(rootList, props.item.id);
     if (anchorInfo && targetInfo && anchorInfo.parentArray === targetInfo.parentArray) {
       const start = Math.min(anchorInfo.index, targetInfo.index);
       const end = Math.max(anchorInfo.index, targetInfo.index);
@@ -372,7 +346,7 @@ function applyClickSelection(e: MouseEvent) {
       for (const n of rangeNodes) {
         rangeIds.push(n.id);
         if (n.type === 'folder') {
-          collectItemIdsInOrder(n, rangeIds);
+          collectLayerItemIds(n, rangeIds);
         }
       }
       const prev = Array.isArray(ls.selected) ? ls.selected : [];
@@ -393,7 +367,7 @@ function applyClickSelection(e: MouseEvent) {
     if (!isSelected.value) {
       if (props.item.type === 'folder') {
         const ids = [props.item.id];
-        collectItemIdsInOrder(props.item, ids);
+        collectLayerItemIds(props.item, ids);
         applyLayerSelection(ls, Array.from(new Set([...ls.selected, ...ids])), 'item');
       } else {
         applyLayerSelection(ls, [...ls.selected, props.item.id], props.item.type);
@@ -411,43 +385,20 @@ function applyClickSelection(e: MouseEvent) {
   ls.last_clicked_id = props.item.id;
 }
 
-function collectItemIdsInOrder(node, acc) {
-  if (!node) return;
-  if (node.type === 'item') {
-    acc.push(node.id);
-    return;
-  }
-  if (Array.isArray(node.childs)) {
-    for (const child of node.childs) {
-      collectItemIdsInOrder(child, acc);
-    }
-  }
-}
-
 function onPreviewClick(e) {
+  search?.rememberInteraction(props.item);
   if (props.toggleVisibility) {
     props.toggleVisibility(props.item, e.altKey === true);
   }
 }
 
-function findNodeInTree(nodes, id) {
-  if (!Array.isArray(nodes)) return null;
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    if (node.id === id) {
-      return { node, parentArray: nodes, index: i };
-    }
-    if (Array.isArray(node.childs)) {
-      const res = findNodeInTree(node.childs, id);
-      if (res) return res;
-    }
-  }
-  return null;
-}
-
 function toggleCollapse() {
   if (props.item.type !== 'folder') return;
   if (isFolderEmpty.value) return;
+  if (search) {
+    search.toggleFolder(props.item);
+    return;
+  }
   if (props.item.collapsed === undefined) {
     props.item.collapsed = false;
   }
@@ -455,6 +406,7 @@ function toggleCollapse() {
 }
 
 function onDblClick() {
+  search?.rememberInteraction(props.item);
   editName.value = props.item.name || '';
   isEditing.value = true;
   ls.renaming_id = props.item.id;
@@ -489,10 +441,6 @@ function finishEditing() {
     ls.renaming_id = null;
   }
 }
-
-onMounted(() => {
-  nextTick(() => {});
-});
 
 onBeforeUnmount(finishEditing);
 </script>
@@ -545,7 +493,6 @@ onBeforeUnmount(finishEditing);
       margin-left: auto;
       border-radius: 2px;
       flex-shrink: 0;
-      /*border: 1px solid transparent;*/
       position: relative;
       &.is-active {
         &:before {
@@ -561,7 +508,6 @@ onBeforeUnmount(finishEditing);
       }
       &.is-hidden {
         opacity: 0.35;
-        /*border-color: #444444;*/
       }
     }
     .visibility-toggle {
@@ -573,20 +519,6 @@ onBeforeUnmount(finishEditing);
       display: flex;
       align-items: center;
       justify-content: center;
-      &.is-active {
-        /*border-color: #ef0a62;*/
-      }
-      &.is-hidden {
-        opacity: 0.35;
-        /*border-color: #444444;*/
-      }
-    }
-    .visibility-toggle {
-      width: 18px;
-      height: 20px;
-      background: transparent;
-      margin-left: auto;
-      border-radius: 2px;
       &.is-hidden {
         opacity: 0.35;
       }
@@ -598,11 +530,6 @@ onBeforeUnmount(finishEditing);
       height: 10px;
     }
   }
-}
-
-/* default small inset when dragging over (soft) */
-.layer-item.is-dragging {
-  /* subtle */
 }
 
 /* top — inner shadow from top */
@@ -621,6 +548,11 @@ onBeforeUnmount(finishEditing);
 }
 .layer-item.is-selected {
   background: #1f1f1f;
+}
+.layer-item.is-search-match > .main-info > span {
+  color: #ffb8d3;
+  background: #ef0a6230;
+  border-radius: 2px;
 }
 .layer-item.contains-active-item > .main-info {
   position: relative;
@@ -641,44 +573,4 @@ onBeforeUnmount(finishEditing);
     display: none;
   }
 }
-/* content so text doesn't get affected by inset visuals */
-.content {
-  position: relative;
-  z-index: 2;
-  pointer-events: none; /* allow draggable events pass through */
-}
-
-/* optional: a subtle overlay gradient to emphasize the area (if you prefer) */
-/*.layer-item.zone-top::after,
-.layer-item.zone-center::after,
-.layer-item.zone-bottom::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 33%;
-  pointer-events: none;
-  transition: opacity 120ms;
-  opacity: 0;
-}*/
-
-/*.layer-item.zone-top::after {
-  top: 0;
-  background: linear-gradient(to bottom, rgba(0,0,0,0.06), transparent);
-  opacity: 1;
-}
-
-.layer-item.zone-center::after {
-  top: 33%;
-  height: 34%;
-  background: linear-gradient(to bottom, transparent, rgba(0,0,0,0.04));
-  opacity: 1;
-}
-
-.layer-item.zone-bottom::after {
-  bottom: 0;
-  top: auto;
-  background: linear-gradient(to top, rgba(0,0,0,0.06), transparent);
-  opacity: 1;
-}*/
 </style>

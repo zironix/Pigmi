@@ -5,8 +5,14 @@
     @dragover.prevent="onPanelDragOver"
     @drop.prevent="onPanelDrop"
   >
-    <div class="layers-panel-heading">Layers</div>
+    <div class="layers-panel-heading">
+      <span>Layers</span>
+      <span v-if="search.normalizedQuery.value" class="layers-search-count" role="status">
+        {{ search.results.value.matches.size }} found
+      </span>
+    </div>
     <div
+      ref="itemsContainer"
       class="layers-panel-items"
       @dragenter.prevent="onPanelDragEnter"
       @dragover.prevent="onPanelDragOver"
@@ -16,6 +22,7 @@
         v-for="item in layerTree.items"
         :item="item"
         :items="props.items"
+        :itemsById="itemsById"
         :rootItems="layerTree.items"
         :moveItem="moveItem"
         :toggleVisibility="toggleVisibility"
@@ -31,14 +38,15 @@
 </template>
 <script setup lang="ts">
 import LayersItem from './LayersItem.vue';
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue';
+import { cloneLayerNodesWithNewIds, moveLayerNodes } from '../utils/layerTreeOperations';
+import { layerSearchKey, useLayerSearch } from '../utils/layerSearch';
 import { useLayersStore, applyLayerSelection, nextLayerId } from '../stores/layers';
 import { getCanvasItemBounds } from '../utils/canvasItemGeometry';
 import {
   collectLayerItemIds,
   collectLayerNodesByIds,
   findLayerNodeById,
-  isLayerAncestor,
   keepTopLevelLayerNodes,
   resolveLayerPasteTarget,
 } from '../utils/layerPasteTarget';
@@ -46,6 +54,7 @@ const ls: any = useLayersStore();
 
 const props = defineProps<{
   items: Array<any>;
+  searchQuery?: string;
   layers?: Array<any>;
   step?: number | string;
   textureWidth?: number | string;
@@ -57,6 +66,33 @@ const props = defineProps<{
 const layerTree = ref({
   items: [],
 });
+
+const itemsById = computed(() => new Map(props.items.map((item) => [item.id, item])));
+const itemsContainer = ref<HTMLElement | null>(null);
+const search = useLayerSearch(() => layerTree.value.items);
+provide(layerSearchKey, search);
+let scrollBeforeSearch = 0;
+
+watch(search.normalizedQuery, async (query, previous) => {
+  if (query && !previous) scrollBeforeSearch = itemsContainer.value?.scrollTop || 0;
+  await nextTick();
+  if (query !== search.normalizedQuery.value) return;
+  if (query) {
+    itemsContainer.value
+      ?.querySelector('.is-search-match > .main-info')
+      ?.scrollIntoView({ block: 'nearest' });
+  } else if (itemsContainer.value) {
+    itemsContainer.value.scrollTop = scrollBeforeSearch;
+  }
+});
+
+watch(
+  () => props.searchQuery,
+  (query) => {
+    search.query.value = query || '';
+  },
+  { immediate: true },
+);
 
 defineExpose({
   copySelection,
@@ -155,7 +191,7 @@ function pasteClipboard() {
     itemsToInsert = deepClone(items);
   } else {
     const idMap = new Map();
-    nodesToInsert = deepCloneWithNewIds(nodes, idMap);
+    nodesToInsert = cloneLayerNodesWithNewIds(nodes, idMap, () => nextLayerId(ls));
     itemsToInsert = (items || []).map((it) => {
       const cloned = deepClone(it);
       const newId = idMap.get(it.id);
@@ -187,6 +223,7 @@ function pasteClipboard() {
   syncTextureItemsOrder();
 
   const newSelectedIds = nodesToInsert.map((n) => n.id);
+  nodesToInsert.forEach(search.rememberInteraction);
   applyLayerSelection(ls, newSelectedIds);
 
   if (cut) {
@@ -244,19 +281,6 @@ function buildClipboard(cut) {
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
-}
-
-function deepCloneWithNewIds(nodes, idMap) {
-  return nodes.map((node) => {
-    const cloned = deepClone(node);
-    const newId = nextLayerId(ls);
-    idMap.set(node.id, newId);
-    cloned.id = newId;
-    if (Array.isArray(cloned.childs) && cloned.childs.length) {
-      cloned.childs = deepCloneWithNewIds(cloned.childs, idMap);
-    }
-    return cloned;
-  });
 }
 
 function resolvePastePosition() {
@@ -424,123 +448,24 @@ function removeSelected() {
 }
 
 function moveItem(fromId, toId, zone) {
-  if (!layerTree.value.items) return false;
-
-  const root = layerTree.value.items;
-  const selection = Array.isArray(ls.selected) ? ls.selected : [];
-  const selectedSet = new Set(selection);
-
-  function hasSelectedAncestor(nodeId) {
-    let info = findLayerNodeById(root, nodeId);
-    while (info && info.parent) {
-      if (selectedSet.has(info.parent.id)) return true;
-      info = findLayerNodeById(root, info.parent.id);
-    }
-    return false;
-  }
-
-  // Move the complete selection only when the dragged node has no selected parent.
-  const isMovingSelection = selection.includes(fromId) && !hasSelectedAncestor(fromId);
-  const idsToMove = isMovingSelection ? selection : [fromId];
-  const nodesToMove = collectLayerNodesByIds(root, idsToMove);
-
-  // A single dragged node may not be part of the current selection.
-  if (!isMovingSelection && !nodesToMove.some((n) => n.id === fromId)) {
-    const singleInfo = findLayerNodeById(root, fromId);
-    if (!singleInfo) return false;
-    nodesToMove.push(singleInfo.node);
-  }
-
-  if (nodesToMove.length === 0) return false;
-
-  // Moving a folder already moves its children, so discard selected descendants.
-  const topLevelNodes = keepTopLevelLayerNodes(nodesToMove);
-
-  if (topLevelNodes.length === 0) return false;
-
-  const targetInfo = findLayerNodeById(root, toId);
-  if (!targetInfo) return false;
-
-  // Never move a node into itself or one of its descendants.
-  for (const node of topLevelNodes) {
-    if (node.id === toId || isLayerAncestor(node, toId)) {
-      return false;
-    }
-  }
-
-  let insertionArray;
-  let insertIndex;
-
-  if (zone === 'center') {
-    // A center drop appends to the target's children.
-    if (!Array.isArray(targetInfo.node.childs)) {
-      targetInfo.node.childs = [];
-    }
-    insertionArray = targetInfo.node.childs;
-    insertIndex = insertionArray.length;
-  } else {
-    // Top and bottom drops insert beside the target.
-    const parentArray = targetInfo.parentArray || root;
-    insertIndex = zone === 'top' ? targetInfo.index : targetInfo.index + 1;
-    insertionArray = parentArray;
-    insertIndex = Math.max(0, Math.min(insertIndex, parentArray.length));
-  }
-
-  const targetParentArray = insertionArray;
-  let adjustedInsertIndex = insertIndex;
-
-  const nodesToInsert = [];
-
-  for (const node of topLevelNodes) {
-    const currentInfo = findLayerNodeById(root, node.id);
-    if (!currentInfo) continue;
-
-    // Removing an earlier sibling shifts the destination one position left.
-    if (currentInfo.parentArray === targetParentArray && currentInfo.index < adjustedInsertIndex) {
-      adjustedInsertIndex = Math.max(0, adjustedInsertIndex - 1);
-    }
-
-    nodesToInsert.push(currentInfo.node);
-    currentInfo.parentArray.splice(currentInfo.index, 1);
-  }
-
-  if (nodesToInsert.length === 0) return false;
-
-  if (typeof props.onStructureChanged === 'function') {
-    props.onStructureChanged('before');
-  }
-
-  // Resolve a center target again because removing nodes can change its location.
-  if (zone === 'center') {
-    const freshTarget = findLayerNodeById(root, toId);
-    if (!freshTarget) return false;
-
-    if (!Array.isArray(freshTarget.node.childs)) {
-      freshTarget.node.childs = [];
-    }
-    freshTarget.node.collapsed = false;
-    insertionArray = freshTarget.node.childs;
-    insertIndex = insertionArray.length;
-  } else {
-    insertionArray = targetParentArray;
-    insertIndex = adjustedInsertIndex;
-    insertIndex = Math.max(0, Math.min(insertIndex, insertionArray.length));
-  }
-
-  insertionArray.splice(insertIndex, 0, ...nodesToInsert);
-  collapseEmptyFolders(root);
-
-  if (isMovingSelection) {
+  const result = moveLayerNodes(
+    layerTree.value.items,
+    fromId,
+    toId,
+    zone,
+    Array.isArray(ls.selected) ? ls.selected : [],
+    () => props.onStructureChanged?.('before'),
+  );
+  if (!result) return false;
+  result.nodes.forEach(search.rememberInteraction);
+  collapseEmptyFolders(layerTree.value.items);
+  if (result.movingSelection)
     applyLayerSelection(
       ls,
-      nodesToInsert.map((node) => node.id),
+      result.nodes.map((node) => node.id),
     );
-  }
-
   syncTextureItemsOrder();
-  if (typeof props.onStructureChanged === 'function') {
-    props.onStructureChanged('after');
-  }
+  props.onStructureChanged?.('after');
   return true;
 }
 
@@ -832,13 +757,14 @@ function onGlobalDrop(event) {
 }
 
 function generateIDs(items) {
+  const existingIds = new Set(flattenLayerItems(layerTree.value.items));
   let needsOrderSync = false;
   for (let i = 0; i < items.length; i++) {
     if (items[i].id === undefined) {
       items[i].id = nextLayerId(ls);
     }
-    const exists = !!findLayerNodeById(layerTree.value.items, items[i].id);
-    if (!exists) {
+    if (!existingIds.has(items[i].id)) {
+      existingIds.add(items[i].id);
       const newNode = {
         id: items[i].id,
         name: items[i].name,
@@ -896,6 +822,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  search.finishSearch();
   window.removeEventListener('dragenter', onGlobalDragEnter, true);
   window.removeEventListener('dragover', onGlobalDragOver, true);
   window.removeEventListener('drop', onGlobalDrop, true);
@@ -911,6 +838,9 @@ onBeforeUnmount(() => {
   left: 0;
   overflow: hidden;
   .layers-panel-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     padding: 10px 15px;
     border-bottom: 1px solid #1a1b1e;
     background: #242629;
@@ -922,6 +852,9 @@ onBeforeUnmount(() => {
 
     color: #929293;
     font-size: 12px;
+  }
+  .layers-search-count {
+    font-size: 10px;
   }
   .layers-panel-items {
     position: absolute;

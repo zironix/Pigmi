@@ -29,7 +29,7 @@ describe('canvas item geometry', () => {
         color_mode: 'rgb',
         colors: [{}, {}, {}],
       }),
-    ).toEqual({ x: 10, y: 20, width: 48, height: 8 });
+    ).toEqual({ x: 10, y: 20, width: 40, height: 8 });
 
     expect(
       getCanvasItemBounds({
@@ -71,5 +71,6 @@ describe('canvas item geometry', () => {
 
     expect(isPointInsideCanvasItem(item, 34, 24)).toBe(true);
     expect(getCanvasItemCellOffset(item, 34, 24)).toEqual({ x: 2, y: 0 });
+    expect(getCanvasItemCellOffset(item, 10, 20)).toEqual({ x: 0, y: 0 });
   });
 });

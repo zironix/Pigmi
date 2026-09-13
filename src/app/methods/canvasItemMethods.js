@@ -1,48 +1,49 @@
+import { redistributeColorOffsets } from '../../utils/colorStops';
 import { applyLayerSelection, nextLayerId } from '../../stores/layers';
 import { isPlatformPrimaryModifier } from '../../utils/inputModifiers';
 
 export const canvasItemMethods = {
   create(event) {
-    let new_item = {};
-    new_item = {
+    const template = JSON.parse(JSON.stringify(this.lastItem));
+    const newItem = {
       id: nextLayerId(this.ls),
-      name: this.lastItem.name,
-      type: this.lastItem.type,
-      colors: this.regenerateColorIds([...this.lastItem.colors]),
-      color_offsets: this.lastItem.color_offsets,
+      name: template.name,
+      type: template.type,
+      colors: this.regenerateColorIds([...template.colors]),
+      color_offsets: template.color_offsets,
       x:
         Math.floor(event.offsetX / (this.texture.step * this.finalZoom)) *
         parseInt(this.texture.step),
       y:
         Math.floor(event.offsetY / (this.texture.step * this.finalZoom)) *
         parseInt(this.texture.step),
-      size: this.lastItem.size,
-      color_mode: this.lastItem.color_mode,
-      direction: this.lastItem.direction,
-      shape: this.lastItem.shape,
-      albedo: this.lastItem.albedo,
-      roughness: this.lastItem.roughness,
-      metallic: this.lastItem.metallic,
-      emission: this.lastItem.emission,
-      emission_strength: this.lastItem.emission_strength,
-      clearcoat: this.lastItem.clearcoat,
-      clearcoat_roughness: this.lastItem.clearcoat_roughness,
-      steps: this.lastItem.steps,
+      size: template.size,
+      color_mode: template.color_mode,
+      direction: template.direction,
+      shape: template.shape,
+      albedo: template.albedo,
+      roughness: template.roughness,
+      metallic: template.metallic,
+      emission: template.emission,
+      emission_strength: template.emission_strength,
+      clearcoat: template.clearcoat,
+      clearcoat_roughness: template.clearcoat_roughness,
+      steps: template.steps,
       visible: true,
       selected: true,
     };
 
-    this.texture.items.push(new_item);
+    this.texture.items.push(newItem);
     for (let i = this.texture.items.length - 1; i >= 0; i--) {
       this.texture.items[i].selected = false;
     }
-    new_item.selected = true;
+    newItem.selected = true;
     if (this.ls) {
-      this.ls.pending_select_id = new_item.id;
-      applyLayerSelection(this.ls, [new_item.id], 'item');
+      this.ls.pending_select_id = newItem.id;
+      applyLayerSelection(this.ls, [newItem.id], 'item');
     }
     this.$nextTick(() => {
-      const idx = this.texture.items.findIndex((item) => item.id === new_item.id);
+      const idx = this.texture.items.findIndex((item) => item.id === newItem.id);
       if (idx !== -1) {
         for (let i = this.texture.items.length - 1; i >= 0; i--) {
           this.texture.items[i].selected = false;
@@ -101,48 +102,21 @@ export const canvasItemMethods = {
     this.addColor(redistributeOffsets);
   },
   addColor(redistributeOffsets = false) {
-    const last_color =
-      this.texture.items[this.selected].colors[this.texture.items[this.selected].colors.length - 1];
-
-    this.texture.items[this.selected].colors.push({
-      rgba: {
-        r: last_color.rgba.r,
-        g: last_color.rgba.g,
-        b: last_color.rgba.b,
-        a: last_color.rgba.a,
-      },
-      hsva: {
-        h: last_color.hsva.h,
-        s: last_color.hsva.s,
-        v: last_color.hsva.v,
-        a: last_color.hsva.a,
-      },
-      id: new Date().getTime(),
+    const item = this.texture.items[this.selected];
+    if (!item) return;
+    const lastColor = item.colors.at(-1) || this.lastItem.colors[0];
+    if (!lastColor) return;
+    item.colors.push({
+      rgba: { ...lastColor.rgba },
+      hsva: { ...lastColor.hsva },
+      id: Date.now(),
     });
-    this.texture.items[this.selected].color_offsets.push(100);
+    item.color_offsets.push(100);
     if (redistributeOffsets) {
-      const o_count = this.texture.items[this.selected].color_offsets.length;
-      let current_offset = 0;
-      this.texture.items[this.selected].color_offsets.forEach((offset_item, offset_index) => {
-        this.texture.items[this.selected].color_offsets[offset_index] = current_offset;
-        current_offset += Math.round(100 / (o_count - 1));
-        if (offset_index === o_count - 1) {
-          this.texture.items[this.selected].color_offsets[offset_index] = 100;
-        }
-        if (o_count === 1) {
-          this.texture.items[this.selected].color_offsets[0] = 0;
-        }
-      });
+      redistributeColorOffsets(item.color_offsets);
     } else {
-      if (
-        this.texture.items[this.selected].color_offsets[
-          this.texture.items[this.selected].color_offsets.length - 2
-        ] === 100
-      ) {
-        this.texture.items[this.selected].color_offsets[
-          this.texture.items[this.selected].color_offsets.length - 2
-        ] = 100 - 2;
-      }
+      const previousIndex = item.color_offsets.length - 2;
+      if (item.color_offsets[previousIndex] === 100) item.color_offsets[previousIndex] = 98;
     }
   },
 };
