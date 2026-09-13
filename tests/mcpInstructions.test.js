@@ -119,14 +119,15 @@ describe('Pigmi MCP instructions', () => {
 
   it('keeps fixed instructions compact and never returns every operation by default', () => {
     expect(FULL_PIGMI_MCP_INSTRUCTIONS.trim().split(/\s+/).length).toBeLessThan(1000);
-    expect(PIGMI_EDIT_PROMPT.trim().split(/\s+/).length).toBeLessThan(100);
+    expect(PIGMI_EDIT_PROMPT.trim().split(/\s+/).length).toBeLessThan(115);
     expect(getOperationReference([])).toEqual({});
     expect(Object.keys(getOperationReference(['rename_item']))).toEqual(['rename_item']);
   });
 
   it('keeps repeated server instructions tiny and defines a two-call simple-palette path', () => {
-    expect(PIGMI_SERVER_INSTRUCTIONS.trim().split(/\s+/).length).toBeLessThan(100);
+    expect(PIGMI_SERVER_INSTRUCTIONS.trim().split(/\s+/).length).toBeLessThan(110);
     expect(PIGMI_SERVER_INSTRUCTIONS).toContain('pigmi_get_overview once');
+    expect(PIGMI_SERVER_INSTRUCTIONS).toContain('knownState=stateRevision');
     expect(PIGMI_SERVER_INSTRUCTIONS).toContain(
       'straightforward new palette needs only overview then pigmi_create_items',
     );

@@ -43,6 +43,12 @@ const itemRequestSchema = z.object({
     .array(z.enum(['colors', 'gradient', 'material', 'transform', 'visibility']))
     .default([]),
   limit: z.number().int().min(1).max(100).default(30),
+  offset: z
+    .number()
+    .int()
+    .nonnegative()
+    .default(0)
+    .describe('Continue at nextOffset if truncated; keep the same selectors and revision.'),
 });
 
 const detailFieldSchema = z.enum(['colors', 'gradient', 'material', 'transform', 'visibility']);
@@ -152,15 +158,18 @@ server.registerPrompt(
     title: 'Edit the active Pigmi document',
     description:
       'Runs the recommended progressive-read and atomic-write workflow for a Pigmi request.',
-    argsSchema: { request: z.string().min(1).describe('The requested Pigmi task') },
+    argsSchema: {
+      request: z.string().min(1).describe('The requested Pigmi task'),
+      detailed: z.enum(['true', 'false']).optional().describe('Include the full editing guide.'),
+    },
   },
-  async ({ request }) => ({
+  async ({ request, detailed }) => ({
     messages: [
       {
         role: 'user',
         content: {
           type: 'text',
-          text: `${FULL_PIGMI_MCP_INSTRUCTIONS}\n\n${PIGMI_EDIT_PROMPT}\n${request}`,
+          text: `${detailed === 'true' ? `${FULL_PIGMI_MCP_INSTRUCTIONS}\n\n` : ''}${PIGMI_EDIT_PROMPT}\n${request}`,
         },
       },
     ],
@@ -171,17 +180,21 @@ server.registerTool(
   'pigmi_get_overview',
   {
     description:
-      'Start every document task here, once. Returns revision, defaults, selection, semantic paths, folder bounds, and hierarchy validity. For a straightforward new palette, call pigmi_create_items next without another read.',
+      'Returns revision, stateRevision, defaults, selection, and root/selected layers. Reuse knownState=stateRevision to get unchanged:true when current. Use detail:full for the full index or read exact folders/items. A simple new palette needs only this then pigmi_create_items.',
+    inputSchema: {
+      detail: z.enum(['summary', 'full']).default('summary'),
+      knownState: z.string().optional(),
+    },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
-  async () => callBridge('get_overview', {}),
+  async (params) => callBridge('get_overview', params),
 );
 
 server.registerTool(
   'pigmi_get_items',
   {
     description:
-      'After overview, fetch only necessary fields for exact items or a compact palette inventory. Skip this for a straightforward new palette whose request and overview already provide enough evidence.',
+      'Fetch only missing fields for exact items or a palette inventory. Reuse details already in context when their revision is current.',
     inputSchema: { requests: z.array(itemRequestSchema).min(1).max(4) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
@@ -192,7 +205,7 @@ server.registerTool(
   'pigmi_get_folders',
   {
     description:
-      'After overview, fetch exact folders as complete templates with bounds, relative paths, and only requested fields. Use when a variant or edit must preserve an existing hierarchy.',
+      'Read exact subtrees, bounds, and requested fields. Check complete/truncated before treating a result as a full template.',
     inputSchema: {
       paths: z.array(z.string().min(1)).min(1).max(8),
       fields: z.array(detailFieldSchema).default([]),
@@ -206,21 +219,22 @@ server.registerTool(
   'pigmi_compare_folders',
   {
     description:
-      'After overview, align relevant sibling folders by relative path and return raw placements and requested differences. Use only when extending an existing repeated family.',
+      'Compare sibling folders by relative path. Compact output stores identical fields in role.shared; merge with each values entry. compact:false returns expanded values.',
     inputSchema: {
       paths: z.array(z.string().min(1)).min(2).max(8),
       fields: z.array(detailFieldSchema).default([]),
+      compact: z.boolean().default(true),
     },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
-  async ({ paths, fields }) => callBridge('compare_folders', { paths, fields }),
+  async ({ paths, fields, compact }) => callBridge('compare_folders', { paths, fields, compact }),
 );
 
 server.registerTool(
   'pigmi_validate_document',
   {
     description:
-      'Checks hierarchy, ids, paths, gradients, materials, and canvas bounds. Reserve for complex or suspicious structural edits; routine successful palette creation does not need it.',
+      'Check hierarchy, IDs, paths, gradients, materials, and bounds after complex or suspicious edits.',
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async () => callBridge('validate_document', {}),
@@ -230,7 +244,7 @@ server.registerTool(
   'pigmi_duplicate_folder_variants',
   {
     description:
-      'Specialized write for complete folder variants. After overview and only the relevant folder evidence, infer exact names and source-relative offsets, then write directly without an operation reference.',
+      'Duplicate complete folder variants with exact names and source-relative offsets; no operation reference needed.',
     inputSchema: {
       sourcePath: z.string().min(1),
       variants: z
@@ -267,7 +281,7 @@ server.registerTool(
   'pigmi_edit_folder_items',
   {
     description:
-      'Specialized write for exact roles inside existing folders. Address items by relative path and write directly after the necessary read; no generic operation reference is needed.',
+      'Edit roles inside existing folders by relative path; no operation reference needed.',
     inputSchema: {
       folders: z
         .array(
@@ -300,7 +314,7 @@ server.registerTool(
   'pigmi_create_items',
   {
     description:
-      'One-write fast path for a new palette after overview. Omit folderPath for root; use it only when the user or a clear local pattern requires a folder, and missing folders are created automatically. Items are edge-to-edge unless spacing is explicit; otherwise flow left-to-right then top-to-bottom. A success response is final: never call again merely to organize. Do not fetch references, preview, or validate unless ambiguity requires it.',
+      'Create a new palette in one write. Omit folderPath for root; missing folders are created automatically. Items touch edge-to-edge unless spacing is requested. After success, never call again merely to organize. No operation reference needed.',
     inputSchema: {
       items: z.array(gradientItemSchema).min(1).max(200),
       folderPath: z
@@ -340,7 +354,7 @@ server.registerTool(
   'pigmi_apply_operations',
   {
     description:
-      'Generic atomic write for operations not covered by specialized tools. First request references only for the operation types used. Pass expectedRevision; use dryRun only when a concrete ambiguity makes it useful.',
+      'Atomic write for other operations. Fetch references only for unfamiliar operations. Pass expectedRevision. dryRun returns current revision and a separate proposedRevision without applying changes.',
     inputSchema: {
       operations: z.array(z.record(z.string(), z.unknown())).max(500),
       expectedRevision: z.string().optional(),
@@ -367,11 +381,12 @@ server.registerTool(
   {
     description:
       'Returns the rendered canvas as PNG. Use only when visual evidence is needed; routine successful writes do not require a preview.',
+    inputSchema: { maxSide: z.number().int().min(64).max(4096).default(1024) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
-  async () => {
+  async ({ maxSide }) => {
     try {
-      const preview = await bridge.call('get_canvas_preview', {});
+      const preview = await bridge.call('get_canvas_preview', { maxSide });
       const match = /^data:image\/png;base64,(.+)$/.exec(preview.dataUrl || '');
       if (!match) throw new Error('Pigmi returned an invalid canvas preview');
       return {
@@ -426,7 +441,7 @@ server.registerResource(
     mimeType: 'application/json',
   },
   async (uri) => {
-    const overview = await bridge.call('get_overview', {});
+    const overview = await bridge.call('get_overview', { detail: 'summary' });
     return {
       contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(overview) }],
     };

@@ -7,6 +7,8 @@ import {
 } from '../../ai/editorInspection';
 import { collectItemFolderPaths, getMapValueById } from '../../ai/aiPlanShared';
 import { applyLayerSelection } from '../../stores/layers';
+import { documentRevision, fingerprint } from '../../ai/editorRevision';
+import { saveDocumentSnapshot } from './filesMethods';
 
 const MAX_OPERATIONS = 500;
 const SUPPORTED_OPERATIONS = new Set([
@@ -33,16 +35,6 @@ const SUPPORTED_OPERATIONS = new Set([
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
-}
-
-function documentRevision(texture) {
-  const source = JSON.stringify(texture);
-  let hash = 2166136261;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${source.length}-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 function createIdFactory(texture) {
@@ -110,19 +102,36 @@ export const mcpMethods = {
   getMcpSelectionIds() {
     return Array.isArray(this.ls?.selected) ? [...this.ls.selected] : [];
   },
-  buildMcpOverview() {
+  buildMcpOverview({ detail = 'full', knownState } = {}) {
+    const revision = documentRevision(this.texture);
+    const project = {
+      directory: this.folder_path || null,
+      document: this.selected_file || null,
+      synchronized: this.sync === true,
+    };
+    const selectionIds = this.getMcpSelectionIds();
+    // Include non-document state and the requested view. Identical texture JSON
+    // alone cannot prove that selection, creation defaults, or project stayed put.
+    const stateRevision = fingerprint({
+      revision,
+      project,
+      selectionIds,
+      activeId: this.ls?.active_id,
+      activeType: this.ls?.active_type,
+      lastItem: this.lastItem,
+      detail,
+    });
+    if (knownState === stateRevision) return { revision, stateRevision, unchanged: true };
     return {
-      revision: documentRevision(this.texture),
-      project: {
-        directory: this.folder_path || null,
-        document: this.selected_file || null,
-        synchronized: this.sync === true,
-      },
+      revision,
+      stateRevision,
+      project,
       ...buildEditorOverview({
         texture: this.texture,
-        selectionIds: this.getMcpSelectionIds(),
+        selectionIds,
         activeId: this.ls?.active_id,
         lastItem: this.lastItem,
+        detail,
       }),
     };
   },
@@ -176,8 +185,8 @@ export const mcpMethods = {
       return buildMcpWriteResult({
         applied: false,
         dryRun: true,
-        revision: nextRevision,
-        result,
+        revision: currentRevision,
+        result: { ...result, proposedRevision: nextRevision },
         texture: nextTexture,
       });
     }
@@ -196,7 +205,7 @@ export const mcpMethods = {
     return buildMcpWriteResult({
       applied: true,
       dryRun: false,
-      revision: nextRevision,
+      revision: documentRevision(this.texture),
       result,
       texture: this.texture,
     });
@@ -205,23 +214,16 @@ export const mcpMethods = {
     if (!this.folder_path || !this.selected_file) {
       throw new Error('No project document is open');
     }
-    const filePath = window.electronAPI.joinPath(this.folder_path, this.selected_file);
-    await window.electronAPI.writeTextFile(filePath, JSON.stringify(this.texture));
-    this.sync = true;
-
-    if (exportMaps) {
-      const maps = [
-        ['save_albedo', 'albedo'],
-        ['save_roughness', 'roughness'],
-        ['save_metallic', 'metallic'],
-        ['save_emission', 'emission'],
-        ['save_clearcoat', 'clearcoat'],
-        ['save_clearcoat_roughness', 'clearcoat_roughness'],
-        ['save_mrc', 'mrc'],
-      ];
-      for (const [flag, map] of maps) {
-        if (this.texture[flag]) await this.mixTexture(map);
-      }
+    const texture = this.texture;
+    const folderPath = this.folder_path;
+    const selectedFile = this.selected_file;
+    const filePath = await saveDocumentSnapshot(this, { exportMaps });
+    if (
+      this.texture === texture &&
+      this.folder_path === folderPath &&
+      this.selected_file === selectedFile
+    ) {
+      this.sync = true;
     }
 
     return { saved: true, path: filePath, exportedMaps: exportMaps };
@@ -231,25 +233,45 @@ export const mcpMethods = {
     await this.getFiles();
     const available = (this.files_in_folder || []).includes(fileName);
     if (!available) throw new Error(`Project document not found: ${fileName}`);
+    const previousFile = this.selected_file;
+    const previousTexture = this.texture;
     this.selected_file = fileName;
-    await this.loadAndSync({ throwOnError: true });
-    return this.buildMcpOverview();
+    try {
+      await this.loadAndSync({ throwOnError: true });
+    } catch (error) {
+      if (this.selected_file === fileName && this.texture === previousTexture) {
+        this.selected_file = previousFile;
+      }
+      throw error;
+    }
+    return this.buildMcpOverview({ detail: 'summary' });
   },
-  getMcpCanvasPreview() {
+  getMcpCanvasPreview({ maxSide = 1024 } = {}) {
     const canvas = this.$refs.texture;
     if (!canvas || typeof canvas.toDataURL !== 'function') {
       throw new Error('Canvas preview is not available');
     }
+    const limit = Math.max(64, Math.min(4096, Number(maxSide) || 1024));
+    const scale = Math.min(1, limit / Math.max(canvas.width, canvas.height));
+    let preview = canvas;
+    if (scale < 1) {
+      preview = document.createElement('canvas');
+      preview.width = Math.max(1, Math.round(canvas.width * scale));
+      preview.height = Math.max(1, Math.round(canvas.height * scale));
+      const context = preview.getContext('2d');
+      context.imageSmoothingEnabled = false;
+      context.drawImage(canvas, 0, 0, preview.width, preview.height);
+    }
     return {
-      dataUrl: canvas.toDataURL('image/png'),
-      width: canvas.width,
-      height: canvas.height,
+      dataUrl: preview.toDataURL('image/png'),
+      width: preview.width,
+      height: preview.height,
     };
   },
   async handleMcpRequest({ method, params }) {
     switch (method) {
       case 'get_overview':
-        return this.buildMcpOverview();
+        return this.buildMcpOverview(params);
       case 'get_items':
         return {
           revision: documentRevision(this.texture),
@@ -275,6 +297,7 @@ export const mcpMethods = {
             texture: this.texture,
             paths: params?.paths,
             fields: params?.fields,
+            compact: params?.compact,
           }),
         };
       case 'validate_document':
@@ -294,7 +317,7 @@ export const mcpMethods = {
         };
       }
       case 'get_canvas_preview':
-        return this.getMcpCanvasPreview();
+        return this.getMcpCanvasPreview(params);
       case 'get_project':
         await this.getFiles();
         return this.getMcpProject();

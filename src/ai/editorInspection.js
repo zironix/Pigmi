@@ -156,7 +156,7 @@ function flattenFolderTree(node, entries = []) {
   return entries;
 }
 
-export function compareFolderSnapshots({ texture, paths, fields = [] }) {
+export function compareFolderSnapshots({ texture, paths, fields = [], compact = false }) {
   const snapshot = buildFolderSnapshots({ texture, paths, fields, includeItemIndex: true });
   const roles = new Map();
   const structureRoles = new Map();
@@ -209,14 +209,35 @@ export function compareFolderSnapshots({ texture, paths, fields = [] }) {
     structurallyEquivalent:
       snapshot.folders.length > 0 &&
       snapshot.missingPaths.length === 0 &&
+      snapshot.ignoredPaths.length === 0 &&
       snapshot.folders.every((folder) => folder.complete) &&
       structure.every((entry) => entry.missingIn.length === 0),
     placements: snapshot.folders.map((folder) => ({ path: folder.path, bounds: folder.bounds })),
     structure,
-    roles: comparisons,
+    roles: compact ? comparisons.map(shareCommonValues) : comparisons,
+    ...(compact ? { valueFormat: 'Merge each role.shared with each role.values entry.' } : {}),
     missingPaths: snapshot.missingPaths,
     ignoredPaths: snapshot.ignoredPaths,
     truncated: snapshot.truncated,
+  };
+}
+
+function shareCommonValues(role) {
+  if (role.values.length < 2) return role;
+  const [first, ...rest] = role.values;
+  const shared = {};
+  for (const [key, value] of Object.entries(first)) {
+    if (key === 'id' || key === 'folderPath') continue;
+    const signature = JSON.stringify(value);
+    if (rest.every((entry) => JSON.stringify(entry[key]) === signature)) shared[key] = value;
+  }
+  if (!Object.keys(shared).length) return role;
+  return {
+    ...role,
+    shared,
+    values: role.values.map((entry) =>
+      Object.fromEntries(Object.entries(entry).filter(([key]) => !Object.hasOwn(shared, key))),
+    ),
   };
 }
 

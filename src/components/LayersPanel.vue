@@ -71,19 +71,13 @@ const itemsById = computed(() => new Map(props.items.map((item) => [item.id, ite
 const itemsContainer = ref<HTMLElement | null>(null);
 const search = useLayerSearch(() => layerTree.value.items);
 provide(layerSearchKey, search);
-let scrollBeforeSearch = 0;
-
-watch(search.normalizedQuery, async (query, previous) => {
-  if (query && !previous) scrollBeforeSearch = itemsContainer.value?.scrollTop || 0;
+watch(search.normalizedQuery, async (query) => {
+  if (!query) return;
   await nextTick();
   if (query !== search.normalizedQuery.value) return;
-  if (query) {
-    itemsContainer.value
-      ?.querySelector('.is-search-match > .main-info')
-      ?.scrollIntoView({ block: 'nearest' });
-  } else if (itemsContainer.value) {
-    itemsContainer.value.scrollTop = scrollBeforeSearch;
-  }
+  itemsContainer.value
+    ?.querySelector('.is-search-match > .main-info')
+    ?.scrollIntoView({ block: 'nearest' });
 });
 
 watch(

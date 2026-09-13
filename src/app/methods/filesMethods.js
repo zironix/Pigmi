@@ -2,7 +2,16 @@ import { MATERIAL_CHANNELS } from '../../utils/canvasRendering';
 
 const saveStates = new WeakMap();
 
-function captureExportSnapshot(editor, canPreview) {
+function getSaveState(editor) {
+  let state = saveStates.get(editor);
+  if (!state) {
+    state = { revision: 0, pending: Promise.resolve() };
+    saveStates.set(editor, state);
+  }
+  return state;
+}
+
+function captureExportSnapshot(editor, canPreview, exportMaps = true) {
   const snapshot = {
     folder_path: editor.folder_path,
     selected_file: editor.selected_file,
@@ -13,6 +22,7 @@ function captureExportSnapshot(editor, canPreview) {
     ctx: editor.ctx,
     canPreview,
   };
+  if (!exportMaps) return snapshot;
   const channels = new Set(
     MATERIAL_CHANNELS.filter((channel) => editor.texture[`save_${channel}`]),
   );
@@ -33,6 +43,30 @@ function captureExportSnapshot(editor, canPreview) {
     snapshot[`ctx_${channel}`] = context;
   }
   return snapshot;
+}
+
+async function writeSnapshot(editor, snapshot, exportMaps) {
+  const path = snapshot.folder_path + snapshot.slash + snapshot.selected_file;
+  await window.electronAPI.writeTextFile(path, snapshot.serializedTexture);
+  // Albedo mixing updates emission, so preserve this export order.
+  if (exportMaps) {
+    for (const channel of MATERIAL_CHANNELS) {
+      if (snapshot.texture[`save_${channel}`]) await editor.mixTexture.call(snapshot, channel);
+    }
+  }
+  return path;
+}
+
+export function saveDocumentSnapshot(editor, { exportMaps = false } = {}) {
+  const state = getSaveState(editor);
+  clearTimeout(editor.save_timer);
+  state.revision++;
+  // Capture when requested, then join the autosave queue so older writes cannot
+  // overwrite this save or export pixels from a subsequently opened document.
+  const snapshot = captureExportSnapshot(editor, () => false, exportMaps);
+  const operation = state.pending.then(() => writeSnapshot(editor, snapshot, exportMaps));
+  state.pending = operation.catch(() => {});
+  return operation;
 }
 
 async function loadProjectImage(filePath) {
@@ -182,11 +216,7 @@ export const fileMethods = {
   async save() {
     const updateInterval = Math.max(100, Number(this.texture.update_interval) || 100);
     clearTimeout(this.save_timer);
-    let state = saveStates.get(this);
-    if (!state) {
-      state = { revision: 0, pending: Promise.resolve() };
-      saveStates.set(this, state);
-    }
+    const state = getSaveState(this);
     const revision = ++state.revision;
     if (!this.sync || !this.folder_path || !this.selected_file) return;
     const texture = this.texture;
@@ -205,12 +235,7 @@ export const fileMethods = {
         if (!isCurrent()) return;
         try {
           const snapshot = captureExportSnapshot(this, isCurrent);
-          const path = snapshot.folder_path + snapshot.slash + snapshot.selected_file;
-          await window.electronAPI.writeTextFile(path, snapshot.serializedTexture);
-          // Albedo mixing updates emission, so preserve this export order.
-          for (const channel of MATERIAL_CHANNELS) {
-            if (snapshot.texture[`save_${channel}`]) await this.mixTexture.call(snapshot, channel);
-          }
+          await writeSnapshot(this, snapshot, true);
         } catch (error) {
           console.error('Error saving file:', error);
         }
@@ -252,6 +277,8 @@ export const fileMethods = {
           await this.$nextTick();
           this.draw();
           this.addUndo();
+        } else if (throwOnError) {
+          throw new Error(`Document no longer exists: ${this.selected_file}`);
         }
       } catch (error) {
         console.error('Error loading file:', error);

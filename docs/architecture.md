@@ -75,10 +75,22 @@ validate_document
   -> structural and value diagnostics after complex edits
 ```
 
+Overview defaults to `detail:summary`: at most 40 folders and 40 items, prioritizing selected
+layers and showing root layers. Omission counts distinguish hidden detail from absent data;
+`detail:full` retains the larger index. Pass the returned `stateRevision` as `knownState` on
+subsequent overviews for an `unchanged:true` response. This token covers document content,
+selection, creation defaults, project, and detail mode; it is separate from the write `revision`.
+Reactive document revisions are cached with synchronous invalidation on nested changes. Clients
+must retain actual previously read data; after context loss, fetch required details again.
+
 An overview omits detailed item payloads and explicitly reports hierarchy validity. A selective
 item-read workflow is limited to four requests, 100 items per request, and 200 returned items in
 total. Folder snapshots are limited to eight folders and 300 items. Write requests are limited to
-500 operations.
+500 operations. Item and palette reads expose total counts, `truncated`, and `nextOffset`;
+continue with `offset` and the same selectors while the document revision remains unchanged.
+Palette counts include every matching item, independently of page size. Compact folder
+comparisons factor identical fields into `role.shared`; merge it into each `role.values` entry,
+or request `compact:false`. PNG previews default to a 1024-pixel longest side (`maxSide` up to 4096).
 
 Folder reads return structure and canvas bounds by default; color, gradient, material, transform,
 and visibility details are opt-in. The MCP model is instructed to infer naming, language/script,
@@ -107,12 +119,14 @@ per stop, or encode alpha in an eight-digit hex color.
 Clients should pass the revision returned by a read as `expectedRevision`. Pigmi rejects a stale
 write instead of applying it to a document changed by the user in the meantime. By default, any
 operation warning rejects the complete request. `dryRun` validates and previews generated IDs
-without mutating the editor.
+without mutating the editor. Its `revision` remains the current document revision;
+`proposedRevision` describes the trial result. Explicit saves share the autosave queue and export
+from a private snapshot, preventing older writes and later edits from contaminating saved files.
 
 Some MCP clients repeat server-wide instructions beside every tool, so Pigmi keeps that bootstrap
 deliberately short. It defines the safe fast path and model-driven convention inference without
 duplicating the complete workflow across the model context. Detailed reference-image, material,
-variant, and layout guidance is supplied by the optional MCP prompt for clients that request it.
+variant, and layout guidance is available with prompt argument `detailed:"true"`; the default prompt is brief.
 Straightforward palette creation should take two tool calls: one overview and one specialized write.
 
 ### Local bridge security

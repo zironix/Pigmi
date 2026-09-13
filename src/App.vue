@@ -37,7 +37,7 @@
           ref="layerSearchInput"
           v-model="layerSearchQuery"
           type="text"
-          placeholder="Search layers…"
+          placeholder="Search"
           aria-label="Search layers and folders"
           autocomplete="off"
           spellcheck="false"

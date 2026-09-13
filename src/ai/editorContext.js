@@ -1,7 +1,6 @@
 import {
   collectItemFolderPaths,
   computeItemBounds,
-  computeFolderBounds,
   getMapValueById,
   gradientDescriptor,
   idKey,
@@ -62,6 +61,7 @@ export const EDITOR_DATA_REQUEST_SCHEMA = {
             },
           },
           limit: { type: 'number' },
+          offset: { type: 'integer', minimum: 0 },
         },
         required: ['type', 'ids', 'query', 'folderPath', 'selected', 'fields', 'limit'],
         additionalProperties: false,
@@ -131,10 +131,53 @@ function collectLayerIndex(nodes, currentPath = '', parentId = null, result = []
   return result;
 }
 
-export function buildEditorOverview({ texture, selectionIds, activeId, lastItem }) {
+function indexFolderBounds(layers, itemsById) {
+  const index = new Map();
+  function visit(nodes) {
+    let combined = null;
+    for (const node of Array.isArray(nodes) ? nodes : []) {
+      if (!node) continue;
+      let bounds = null;
+      if (node.type === 'folder') {
+        bounds = visit(node.childs);
+        index.set(node, bounds);
+      } else if (node.type === 'item') {
+        const item = getMapValueById(itemsById, node.id);
+        const size = computeItemBounds(item);
+        if (size) bounds = { x: item.x, y: item.y, width: size.w, height: size.h };
+      }
+      if (!bounds) continue;
+      if (!combined) {
+        combined = { ...bounds };
+        continue;
+      }
+      const x = Math.min(combined.x, bounds.x);
+      const y = Math.min(combined.y, bounds.y);
+      const right = Math.max(combined.x + combined.width, bounds.x + bounds.width);
+      const bottom = Math.max(combined.y + combined.height, bounds.y + bounds.height);
+      combined = { x, y, width: right - x, height: bottom - y };
+    }
+    return combined;
+  }
+  visit(layers);
+  return index;
+}
+
+export function buildEditorOverview({
+  texture,
+  selectionIds,
+  activeId,
+  lastItem,
+  detail = 'full',
+}) {
   const items = Array.isArray(texture?.items) ? texture.items : [];
   const layers = Array.isArray(texture?.layers) ? texture.layers : [];
   const selectedIds = Array.isArray(selectionIds) ? selectionIds : [];
+  const selectedIdSet = new Set(selectedIds.map(idKey));
+  const summary = detail === 'summary';
+  const folderLimit = summary ? 40 : MAX_OVERVIEW_FOLDERS;
+  const itemLimit = summary ? 40 : MAX_OVERVIEW_ITEMS;
+  const visibleInSummary = (entry) => entry.parentId === null || selectedIdSet.has(idKey(entry.id));
   const itemFolderMap = new Map();
   collectItemFolderPaths(layers, '', itemFolderMap);
 
@@ -143,6 +186,7 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
   const layerItemIndex = layerIndex.filter((layer) => layer.type === 'item');
   const folderPaths = folderIndex.map((folder) => folder.path);
   const textureItemById = new Map(items.map((item) => [idKey(item.id), item]));
+  const folderBounds = indexFolderBounds(layers, textureItemById);
   const layerItemIds = new Set(layerItemIndex.map((item) => idKey(item.id)));
   const hierarchyIssues = [];
   const seenLayerIds = new Set();
@@ -175,18 +219,27 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
       folderItemCounts.set(path, (folderItemCounts.get(path) || 0) + 1);
     });
   });
-  const folders = folderIndex.slice(0, MAX_OVERVIEW_FOLDERS).map((folder) => ({
+  const summaryEntries = (entries) =>
+    entries
+      .filter(visibleInSummary)
+      .sort(
+        (left, right) =>
+          Number(selectedIdSet.has(idKey(right.id))) - Number(selectedIdSet.has(idKey(left.id))),
+      );
+  const overviewFolders = summary ? summaryEntries(folderIndex) : folderIndex;
+  const overviewItems = summary ? summaryEntries(layerItemIndex) : layerItemIndex;
+  const folders = overviewFolders.slice(0, folderLimit).map((folder) => ({
     id: folder.id,
     path: folder.path,
     parentId: folder.parentId,
     index: folder.index,
     itemCount: folderItemCounts.get(folder.path) || 0,
-    bounds: computeFolderBounds(folder.node, textureItemById),
+    bounds: folderBounds.get(folder.node),
     ...(folder.visible ? {} : { visible: false }),
     ...(folder.collapsed ? { collapsed: true } : {}),
   }));
 
-  const serializedItems = layerItemIndex.slice(0, MAX_OVERVIEW_ITEMS).map((layerItem) => {
+  const serializedItems = overviewItems.slice(0, itemLimit).map((layerItem) => {
     const item = textureItemById.get(idKey(layerItem.id));
     return {
       id: layerItem.id,
@@ -197,7 +250,7 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
       ...((item ? item.visible !== false : layerItem.visible) ? {} : { visible: false }),
     };
   });
-  const remainingSlots = Math.max(0, MAX_OVERVIEW_ITEMS - serializedItems.length);
+  const remainingSlots = Math.max(0, itemLimit - serializedItems.length);
   const orphanItemPayloads = items.filter((item) => !layerItemIds.has(idKey(item.id)));
   const orphanItems = orphanItemPayloads.slice(0, remainingSlots).map((item) => ({
     id: item.id,
@@ -211,6 +264,7 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
 
   return {
     protocol: 'pigmi-editor-tools/4',
+    ...(summary ? { detail: 'summary' } : {}),
     document: {
       width: toNumber(texture?.width, 0),
       height: toNumber(texture?.height, 0),
@@ -247,12 +301,18 @@ export function buildEditorOverview({ texture, selectionIds, activeId, lastItem 
     hierarchy: {
       folders,
       items: [...serializedItems, ...orphanItems],
-      rootIds: layerIndex.filter((entry) => entry.parentId === null).map((entry) => entry.id),
+      ...(!summary
+        ? {
+            rootIds: layerIndex.filter((entry) => entry.parentId === null).map((entry) => entry.id),
+          }
+        : {}),
       valid: hierarchyIssues.length === 0,
-      issues: hierarchyIssues,
+      issues: summary ? hierarchyIssues.slice(0, 20) : hierarchyIssues,
+      ...(summary ? { issueCount: hierarchyIssues.length } : {}),
       truncated:
-        folderIndex.length > MAX_OVERVIEW_FOLDERS ||
-        layerItemIndex.length + orphanItemPayloads.length > MAX_OVERVIEW_ITEMS,
+        folderIndex.length > folders.length ||
+        layerItemIndex.length + orphanItemPayloads.length >
+          serializedItems.length + orphanItems.length,
       omitted: {
         folders: Math.max(0, folderIndex.length - folders.length),
         items: Math.max(
@@ -294,6 +354,7 @@ export function normalizeEditorDataRequests(input) {
           : null,
       fields,
       limit: Math.max(1, Math.min(MAX_ITEMS_PER_REQUEST, toNumber(request?.limit, 30))),
+      offset: Math.max(0, Math.floor(toNumber(request?.offset, 0))),
     };
   });
 }
@@ -366,7 +427,7 @@ function selectRequestedItems({ items, itemFolderMap, selectionIds, request, all
       .map((entry) => entry.item);
   }
 
-  return candidates.slice(0, request.limit);
+  return candidates;
 }
 
 export function serializeItemDetails(item, itemFolderMap, requestedFields) {
@@ -403,14 +464,13 @@ export function serializeItemDetails(item, itemFolderMap, requestedFields) {
   return result;
 }
 
-function buildPaletteInventory(items, limit) {
+function buildPaletteInventory(items) {
   const counts = new Map();
   items.forEach((item) => {
     itemHexColors(item).forEach((hex) => counts.set(hex, (counts.get(hex) || 0) + 1));
   });
   return [...counts.entries()]
     .sort((left, right) => right[1] - left[1])
-    .slice(0, limit)
     .map(([hex, count]) => ({ hex, count }));
 }
 
@@ -432,9 +492,15 @@ export function fulfillEditorDataRequests({ texture, selectionIds, requests: raw
         request,
         allowAll: true,
       });
+      const palette = buildPaletteInventory(paletteItems);
+      const page = palette.slice(request.offset, request.offset + request.limit);
+      const nextOffset = request.offset + page.length;
       return {
         matchedCount: paletteItems.length,
-        palette: buildPaletteInventory(paletteItems, request.limit),
+        colorCount: palette.length,
+        truncated: nextOffset < palette.length,
+        nextOffset: nextOffset < palette.length ? nextOffset : null,
+        palette: page,
       };
     }
 
@@ -443,14 +509,18 @@ export function fulfillEditorDataRequests({ texture, selectionIds, requests: raw
       items,
       itemFolderMap,
       selectionIds: selectedIds,
-      request: { ...request, limit: effectiveLimit },
+      request,
     });
-    remainingItemBudget -= matchedItems.length;
+    const page = matchedItems.slice(request.offset, request.offset + effectiveLimit);
+    const nextOffset = request.offset + page.length;
+    remainingItemBudget -= page.length;
     const requestedFields = new Set(request.fields);
 
     return {
       matchedCount: matchedItems.length,
-      items: matchedItems.map((item) => serializeItemDetails(item, itemFolderMap, requestedFields)),
+      truncated: nextOffset < matchedItems.length,
+      nextOffset: nextOffset < matchedItems.length ? nextOffset : null,
+      items: page.map((item) => serializeItemDetails(item, itemFolderMap, requestedFields)),
     };
   });
 
