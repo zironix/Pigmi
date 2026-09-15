@@ -104,8 +104,8 @@
       <canvas
         id="texture"
         ref="texture"
-        :width="texture.width * finalZoom"
-        :height="texture.height * finalZoom"
+        :width="texture.width"
+        :height="texture.height"
         @mousedown="mousedown"
         @mouseup="mouseup"
         @mousemove="mousemove"

@@ -226,6 +226,6 @@ focused.
 | Two-finger secondary click | Perform the canvas right-click action                                          |
 | Command-click              | Extend or reduce the selection without triggering the macOS Control-click menu |
 
-Panning or pointer-anchored zoom automatically releases center locking while keeping the canvas in
-its current visual position. The center control in the right-side tab rail restores automatic
+While center locking is enabled, zoom keeps the canvas centered. Panning releases center locking
+while preserving the current position; subsequent zoom follows the pointer. The center control in the right-side tab rail restores automatic
 centering.

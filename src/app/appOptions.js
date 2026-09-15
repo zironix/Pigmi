@@ -1,3 +1,4 @@
+import { canvasContentSignature, normalizeCanvasItem } from '../utils/canvasRendering';
 import Colorpicker2 from '../components/Colorpicker2.vue';
 import LayersPanel from '../components/LayersPanel.vue';
 import McpSetupPanel from '../components/McpSetupPanel.vue';
@@ -199,6 +200,9 @@ export default {
         serverPath: this.mcp.serverPath,
       });
     },
+    canvasContentSignature() {
+      return canvasContentSignature(this.texture);
+    },
     canvasRenderedWidth() {
       return (this.texture?.width || 0) * (this.finalZoom || 1);
     },
@@ -227,10 +231,16 @@ export default {
     canvasStyle() {
       if (this.texture.center_locked) {
         return {
-          position: 'relative',
-          margin: 'auto',
-          left: 'auto',
-          top: 'auto',
+          width: `${this.canvasRenderedWidth}px`,
+          height: `${this.canvasRenderedHeight}px`,
+          flexShrink: 0,
+          imageRendering: 'pixelated',
+          '--checker-size': `${Math.max(1, Number(this.texture.step) || 1) * 20 * this.finalZoom}px`,
+          position: 'absolute',
+          margin: 0,
+          left: '50%',
+          top: '50%',
+          transform: 'translate(-50%, -50%)',
           cursor: this.isPanning ? 'grabbing' : 'pointer',
           userSelect: 'none',
           touchAction: 'none',
@@ -238,7 +248,13 @@ export default {
       }
 
       return {
+        width: `${this.canvasRenderedWidth}px`,
+        height: `${this.canvasRenderedHeight}px`,
+        imageRendering: 'pixelated',
+        '--checker-size': `${Math.max(1, Number(this.texture.step) || 1) * 20 * this.finalZoom}px`,
         position: 'absolute',
+        margin: 0,
+        transform: 'none',
         left: `${this.canvasPos.left}px`,
         top: `${this.canvasPos.top}px`,
         cursor: this.isPanning ? 'grabbing' : 'pointer',
@@ -253,6 +269,7 @@ export default {
     },
     texture: {
       handler() {
+        this.texture.items.forEach(normalizeCanvasItem);
         if (this.selected !== false) {
           const currentItem = this.texture.items[this.selected];
           if (!currentItem) {
@@ -269,6 +286,7 @@ export default {
           }
         }
         this.draw();
+        this.save();
       },
       deep: true,
     },
@@ -462,6 +480,8 @@ export default {
     });
   },
   beforeUnmount() {
+    this.stopZoomAnimation();
+    this.disposeCanvasRendering();
     this.disposeMcpRequest?.();
     this.disposeMcpStatus?.();
     document.removeEventListener('keyup', this.keyupHandler);

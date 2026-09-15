@@ -58,7 +58,13 @@ export function makeItem(overrides = {}) {
 export function renderContext(items, options = {}) {
   const context = {
     ...canvasRenderMethods,
-    texture: { width: 256, height: 128, items },
+    draw: canvasRenderMethods.drawNow,
+    texture: {
+      width: 256,
+      height: 128,
+      items,
+      ...Object.fromEntries(MATERIAL_CHANNELS.map((channel) => [`save_${channel}`, 1])),
+    },
     finalZoom: 1.5,
     search: '',
     ctx: recordingContext(),

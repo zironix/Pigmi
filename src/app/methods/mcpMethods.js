@@ -247,6 +247,7 @@ export const mcpMethods = {
     return this.buildMcpOverview({ detail: 'summary' });
   },
   getMcpCanvasPreview({ maxSide = 1024 } = {}) {
+    this.drawNow?.();
     const canvas = this.$refs.texture;
     if (!canvas || typeof canvas.toDataURL !== 'function') {
       throw new Error('Canvas preview is not available');

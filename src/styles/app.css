@@ -79,6 +79,9 @@ body {
     }
   }
 }
+.canvas-container.center-mode {
+  overflow: hidden;
+}
 .canvas-container.locked-left {
   left: 270px;
 }
@@ -268,7 +271,8 @@ body {
 #texture {
   border: 1px solid #000000;
   background: url('../assets/checkers.png');
-  background-size: 209px;
+  /* The tile has 20 cells per side; each cell matches one snapping step. */
+  background-size: var(--checker-size) var(--checker-size);
   flex-shrink: 0;
 
   position: absolute;

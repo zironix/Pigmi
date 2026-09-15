@@ -12,13 +12,14 @@ function getSaveState(editor) {
 }
 
 function captureExportSnapshot(editor, canPreview, exportMaps = true) {
+  if (exportMaps) editor.drawNow?.();
   const snapshot = {
     folder_path: editor.folder_path,
     selected_file: editor.selected_file,
     slash: editor.slash,
     texture: { ...editor.texture },
     serializedTexture: JSON.stringify(editor.texture),
-    finalZoom: editor.finalZoom,
+    finalZoom: 1,
     ctx: editor.ctx,
     canPreview,
   };
@@ -342,6 +343,7 @@ export const fileMethods = {
     if (this.folder_path != '' && this.selected_file != '') {
       this.sync = true;
       this.draw();
+      this.save();
     }
   },
 };

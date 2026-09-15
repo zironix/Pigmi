@@ -57,3 +57,19 @@ export function classifyWheelInput({
 
   return looksLikePreciseScrolling ? 'pan' : 'zoom';
 }
+
+// Scale changes are multiplicative, so each wheel step feels equally strong at
+// any document size and magnification. Normalize WheelEvent units first.
+export function wheelZoomTarget(scale, event, speed = 50) {
+  const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 800 : 1;
+  const delta = Math.max(-100, Math.min(100, (Number(event.deltaY) || 0) * unit));
+  const sensitivity = 0.0018 * Math.max(0.02, Math.min(10, (Number(speed) || 50) / 50));
+  const pinchMultiplier = event.ctrlKey && event.deltaMode === 0 ? 3 : 1;
+  return Math.max(0.01, Math.min(101, scale * Math.exp(-delta * sensitivity * pinchMultiplier)));
+}
+
+export function approachZoom(current, target, elapsedMs) {
+  const progress = 1 - Math.exp(-Math.max(0, elapsedMs) / 55);
+  const next = Math.exp(Math.log(current) + (Math.log(target) - Math.log(current)) * progress);
+  return Math.abs(Math.log(target / next)) < 0.0001 ? target : next;
+}

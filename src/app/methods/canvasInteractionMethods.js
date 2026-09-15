@@ -9,13 +9,14 @@ import {
   calculateAnchoredCanvasPosition,
   classifyWheelInput,
   WHEEL_GESTURE_IDLE_MS,
+  wheelZoomTarget,
+  approachZoom,
 } from '../../utils/wheelInput';
 
 const PRIMARY_MOUSE_BUTTON = 0;
 const MIDDLE_MOUSE_BUTTON = 1;
 const SECONDARY_MOUSE_BUTTON = 2;
-const MIN_TEXTURE_ZOOM = -99;
-const MAX_TEXTURE_ZOOM = 10000;
+const zoomAnimations = new WeakMap();
 
 export const canvasInteractionMethods = {
   isToggleSelectionPressed(event) {
@@ -26,6 +27,7 @@ export const canvasInteractionMethods = {
     });
   },
   mousedown(event) {
+    this.stopZoomAnimation();
     const isToggleSelection = this.isToggleSelectionPressed(event);
 
     if (event.button === PRIMARY_MOUSE_BUTTON) {
@@ -108,6 +110,7 @@ export const canvasInteractionMethods = {
     }
   },
   toggleCenterLock() {
+    this.stopZoomAnimation();
     const container = this.$refs.canvasContainer;
     const canvas = this.$refs.texture;
 
@@ -126,7 +129,11 @@ export const canvasInteractionMethods = {
 
       this.texture.center_locked = false;
     } else {
-      // CSS centers the canvas; keep canvasPos for the next free-positioning session.
+      // Center against the visible viewport, independent of previous scroll/pan.
+      if (container) {
+        container.scrollLeft = 0;
+        container.scrollTop = 0;
+      }
       this.texture.center_locked = true;
     }
   },
@@ -338,6 +345,7 @@ export const canvasInteractionMethods = {
     }, WHEEL_GESTURE_IDLE_MS);
   },
   panCanvasWithTrackpad(event) {
+    this.stopZoomAnimation();
     if (this.isPanning && this.panInput === 'mouse') return;
     this.unlockCanvasForPan();
     this.canvasPos.left -= event.deltaX;
@@ -366,40 +374,78 @@ export const canvasInteractionMethods = {
     const canvas = this.$refs.texture;
     if (!container || !canvas) return;
 
-    // Cursor-anchored zoom requires a freely positioned canvas. Converting from
-    // centered to absolute positioning preserves its current on-screen location.
-    this.unlockCanvasForPan();
+    if (!event.deltaY) return;
+    let animation = zoomAnimations.get(this);
+    if (
+      animation &&
+      (animation.texture !== this.texture ||
+        animation.lastZoom !== this.texture.zoom ||
+        animation.centered !== this.texture.center_locked)
+    ) {
+      this.stopZoomAnimation();
+      animation = null;
+    }
+    if (!animation) {
+      animation = {
+        texture: this.texture,
+        target: this.finalZoom,
+        centered: this.texture.center_locked,
+        lastZoom: this.texture.zoom,
+        timestamp: performance.now(),
+        frame: null,
+      };
+      zoomAnimations.set(this, animation);
+    }
+    animation.target = wheelZoomTarget(animation.target, event, this.texture.zoom_speed);
+    animation.cursorX = event.clientX;
+    animation.cursorY = event.clientY;
+    if (animation.frame !== null) return;
 
-    const oldZoom = this.finalZoom;
-    const canvasRect = canvas.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-
-    // Smaller textures need a larger zoom step to feel responsive.
-    const textureSize = Math.max(this.texture.width, this.texture.height);
-    const baseZoomStep = this.texture.zoom_speed || 1;
-    const adaptiveZoomStep = baseZoomStep * (100 / textureSize);
-    const step = event.deltaY < 0 ? adaptiveZoomStep : -adaptiveZoomStep;
-
-    this.texture.zoom = Math.max(
-      MIN_TEXTURE_ZOOM,
-      Math.min(MAX_TEXTURE_ZOOM, (this.texture.zoom + step).toFixed(3)),
-    );
-
-    const nextPosition = calculateAnchoredCanvasPosition({
-      cursorX: event.clientX,
-      cursorY: event.clientY,
-      canvasLeft: canvasRect.left,
-      canvasTop: canvasRect.top,
-      containerLeft: containerRect.left,
-      containerTop: containerRect.top,
-      containerScrollLeft: container.scrollLeft,
-      containerScrollTop: container.scrollTop,
-      oldScale: oldZoom,
-      newScale: this.finalZoom,
-    });
-    this.canvasPos.left = nextPosition.left;
-    this.canvasPos.top = nextPosition.top;
-    this.$nextTick(() => this.redrawCanvasAfterResize());
+    const tick = (timestamp) => {
+      if (
+        animation.texture !== this.texture ||
+        animation.lastZoom !== this.texture.zoom ||
+        animation.centered !== this.texture.center_locked
+      ) {
+        this.stopZoomAnimation();
+        return;
+      }
+      const oldScale = this.finalZoom;
+      const newScale = approachZoom(oldScale, animation.target, timestamp - animation.timestamp);
+      animation.timestamp = timestamp;
+      if (!animation.centered) {
+        const rect = container.getBoundingClientRect();
+        // Use current model coordinates, not a DOM rectangle from the previous Vue frame.
+        const position = calculateAnchoredCanvasPosition({
+          cursorX: animation.cursorX,
+          cursorY: animation.cursorY,
+          canvasLeft: rect.left + this.canvasPos.left - container.scrollLeft,
+          canvasTop: rect.top + this.canvasPos.top - container.scrollTop,
+          containerLeft: rect.left,
+          containerTop: rect.top,
+          containerScrollLeft: container.scrollLeft,
+          containerScrollTop: container.scrollTop,
+          oldScale,
+          newScale,
+        });
+        this.canvasPos.left = position.left;
+        this.canvasPos.top = position.top;
+      }
+      this.texture.zoom = (newScale - 1) * 100;
+      animation.lastZoom = this.texture.zoom;
+      if (newScale === animation.target) {
+        zoomAnimations.delete(this);
+      } else {
+        animation.frame = requestAnimationFrame(tick);
+      }
+    };
+    animation.frame = requestAnimationFrame(tick);
+  },
+  stopZoomAnimation() {
+    const animation = zoomAnimations.get(this);
+    if (animation?.frame !== null && animation?.frame !== undefined)
+      cancelAnimationFrame(animation.frame);
+    zoomAnimations.delete(this);
   },
   select(event, createOnMiss = true, additive = false, additiveMode = 'toggle') {
     this.selecting = true;

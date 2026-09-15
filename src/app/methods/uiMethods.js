@@ -123,17 +123,6 @@ export const uiMethods = {
     }
   },
   redrawCanvasAfterResize() {
-    this.$nextTick(() => {
-      const redraw = () => {
-        if (this.ctx && this.ctx.clearRect) {
-          this.draw();
-        }
-      };
-      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-        window.requestAnimationFrame(redraw);
-      } else {
-        redraw();
-      }
-    });
+    this.$nextTick(() => this.draw());
   },
 };

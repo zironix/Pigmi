@@ -39,24 +39,26 @@ export function setMaterialStyles(contexts, item) {
   for (const channel of GRAYSCALE_CHANNELS) {
     const value = ((255 / 100) * item[channel]).toFixed(2);
     values[channel] = value;
-    contexts[channel].fillStyle = `rgb(${value}, ${value}, ${value})`;
+    if (contexts[channel]) contexts[channel].fillStyle = `rgb(${value}, ${value}, ${value})`;
   }
   const alpha = Math.max(((1 / 100) * item.clearcoat_roughness).toFixed(2), 0.01);
-  contexts.mrc.fillStyle = `rgba(${values.metallic}, ${values.roughness}, ${values.clearcoat}, ${alpha})`;
+  if (contexts.mrc)
+    contexts.mrc.fillStyle = `rgba(${values.metallic}, ${values.roughness}, ${values.clearcoat}, ${alpha})`;
 }
 
 /** Draw the same geometry into each export, independently of preview zoom/search. */
 export function fillMaterialRect(contexts, item, rect) {
-  if (item.albedo) contexts.albedo.fillRect(...rect);
+  if (item.albedo) contexts.albedo?.fillRect(...rect);
   if (item.emission === 1) {
-    contexts.emission_crop.fillStyle = 'rgba(255,255,255,1)';
-    contexts.emission_crop.fillRect(...rect);
-    if (item.albedo) contexts.emission.fillRect(...rect);
-    contexts.emission.fillStyle = `rgba(0,0,0,${(100 - item.emission_strength) / 100})`;
-    contexts.emission.fillRect(...rect);
+    if (contexts.emission_crop) contexts.emission_crop.fillStyle = 'rgba(255,255,255,1)';
+    contexts.emission_crop?.fillRect(...rect);
+    if (item.albedo) contexts.emission?.fillRect(...rect);
+    if (contexts.emission)
+      contexts.emission.fillStyle = `rgba(0,0,0,${(100 - item.emission_strength) / 100})`;
+    contexts.emission?.fillRect(...rect);
   }
-  for (const channel of GRAYSCALE_CHANNELS) contexts[channel].fillRect(...rect);
-  contexts.mrc.fillRect(...rect);
+  for (const channel of GRAYSCALE_CHANNELS) contexts[channel]?.fillRect(...rect);
+  contexts.mrc?.fillRect(...rect);
 }
 
 /**
@@ -143,10 +145,10 @@ function createGradient(context, item, zoom, preview) {
 
 export function setGradientStyles(previewContext, contexts, item, zoom) {
   const preview = createGradient(previewContext, item, zoom, true);
-  const albedo = createGradient(contexts.albedo, item, 1, false);
-  const emission = createGradient(contexts.emission, item, 1, false);
+  const albedo = contexts.albedo && createGradient(contexts.albedo, item, 1, false);
+  const emission = contexts.emission && createGradient(contexts.emission, item, 1, false);
   const addStop = (offset, color) => {
-    for (const gradient of [preview, albedo, emission]) gradient.addColorStop(offset, color);
+    for (const gradient of [preview, albedo, emission]) gradient?.addColorStop(offset, color);
   };
 
   if (item.color_mode === 'rgb') {
@@ -154,18 +156,63 @@ export function setGradientStyles(previewContext, contexts, item, zoom) {
       addStop(item.color_offsets[index] / 100, colorCss(color.rgba)),
     );
   } else {
-    // Keep the existing HSL sampling so refactoring does not recolor saved projects.
-    for (let sample = 0; sample < 10; sample++) {
-      const color = LinearColorInterpolator.findColorBetween(
-        item.colors[0].rgba,
-        (item.colors[1] || item.colors[0]).rgba,
-        sample * 10,
-        item.color_mode,
-      );
-      addStop(0.1 * sample, color);
+    // Include every stop and both endpoints, interpolating each HSL segment.
+    if (item.colors.length === 1) {
+      addStop(0, colorCss(item.colors[0].rgba));
+      addStop(1, colorCss(item.colors[0].rgba));
+    } else {
+      const segments = item.colors.length - 1;
+      for (let segment = 0; segment < segments; segment++) {
+        for (let sample = segment === 0 ? 0 : 1; sample <= 10; sample++) {
+          const progress = sample / 10;
+          addStop(
+            (segment + progress) / segments,
+            sample === 0
+              ? colorCss(item.colors[segment].rgba)
+              : sample === 10
+                ? colorCss(item.colors[segment + 1].rgba)
+                : LinearColorInterpolator.findColorBetween(
+                    item.colors[segment].rgba,
+                    item.colors[segment + 1].rgba,
+                    progress * 100,
+                    'hsl',
+                  ),
+          );
+        }
+      }
     }
   }
   previewContext.fillStyle = preview;
-  contexts.albedo.fillStyle = albedo;
-  contexts.emission.fillStyle = emission;
+  if (contexts.albedo) contexts.albedo.fillStyle = albedo;
+  if (contexts.emission) contexts.emission.fillStyle = emission;
+}
+
+// Read only fields that affect map pixels; selection, names, and UI state do not.
+export function canvasContentSignature(texture) {
+  const fields = [
+    'type',
+    'shape',
+    'size',
+    'steps',
+    'x',
+    'y',
+    'direction',
+    'color_mode',
+    'colors',
+    'color_offsets',
+    'albedo',
+    'emission',
+    'emission_strength',
+    'roughness',
+    'metallic',
+    'clearcoat',
+    'clearcoat_roughness',
+    'visible',
+  ];
+  return JSON.stringify([
+    texture.width,
+    texture.height,
+    texture.items.map((item) => fields.map((field) => item[field])),
+    MATERIAL_CHANNELS.map((channel) => texture[`save_${channel}`]),
+  ]);
 }

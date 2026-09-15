@@ -61,7 +61,11 @@ Shared bounds and hit-testing rules live in `src/utils/canvasItemGeometry.js`. U
 instead of reproducing the stepped-gradient formula in UI code.
 
 Rendering calculations and material-channel drawing live in `src/utils/canvasRendering.js`;
-`canvasRenderMethods.js` coordinates them. Color interpolation is shared across preview, albedo,
+`canvasRenderMethods.js` coordinates them, coalesces redraws with requestAnimationFrame, and caches
+map content independently of selection and zoom. Preview bitmap size stays at document resolution;
+CSS provides zoom, and an unselected scene cache avoids rebuilding gradients for selection changes.
+Rendering reads normalized copies; document normalization and autosave run from the editor watcher.
+Color interpolation is shared across preview, albedo,
 and emission. Adjacent stepped transitions share a cell, including its alpha overdraw.
 
 Layer moves and clipboard cloning live in `src/utils/layerTreeOperations.js`. Moves validate their
