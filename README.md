@@ -9,8 +9,10 @@
 </p>
 
 <p align="center">
+  <a href="https://pigmi.ru">Website</a> ·
   <a href="https://github.com/zironix/Pigmi/releases/latest">Download</a> ·
   <a href="docs/editor-guide.md">Editor guide</a> ·
+  <a href="#blender-add-ons">Blender add-ons</a> ·
   <a href="docs/mcp.md">Connect an AI client</a> ·
   <a href="https://github.com/zironix/Pigmi/issues">Report an issue</a>
 </p>
@@ -84,6 +86,41 @@ palette_mrc.png
 Only enabled maps are exported; maps set to WebP use `.webp` instead of `.png`.
 The packed MRC map stores **metallic in R, roughness in G, clearcoat in B, and clearcoat roughness
 in A**. See [export details](docs/editor-guide.md#pbr-materials-and-export) for values and mix textures.
+
+## Blender add-ons
+
+[Pigmi Helpers](Pigmi%20Helpers) contains three optional Blender add-ons for working with palette
+textures, vertex colors, and mesh parts. Each is a separate Python file.
+
+### UV to Palette
+
+[Download / source](Pigmi%20Helpers/pigmi_uv2palette.py)
+
+Move selected UVs into palette cells and map gradients onto a mesh using drawn paths, radial
+mapping, or distance. Includes texture and cell dimensions, margins, and cavity / fake AO controls
+for mapping surface detail into a palette gradient. The panel is in the 3D View sidebar under
+**Snap UV**.
+
+### Highlighter
+
+[Download / source](Pigmi%20Helpers/pigmi_highlighter.py)
+
+Apply vertex colors using a reusable color palette, with quick white, black, and transparent fills.
+Preview changes, then use **Save** to commit or **Restore** to discard the preview. The
+**Pigmi: Highlighter** panel is in the 3D View sidebar under **Tool**.
+
+### Face to Face
+
+[Download / source](Pigmi%20Helpers/pigmi_face2face.py)
+
+Save a selected mesh part relative to a base face or edge, then attach it to another face or edge.
+Adjust rotation, flip, scale, and edge mirroring, or create copies on multiple selected targets.
+The **Pigmi: Face to Face** panel is in the 3D View sidebar under **Tool**.
+
+Download the desired `.py` file using GitHub's **Download raw file** action and install it through
+Blender's add-on preferences, then enable it. The files declare Blender **5.0** for UV to Palette
+and Highlighter, and **4.3** for Face to Face; these are their declared minimum versions, not a
+claim that every later Blender release has been tested.
 
 ## AI clients and MCP
 
