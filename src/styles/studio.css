@@ -1,0 +1,587 @@
+/* Dark Studio: presentation-only theme. Remove this stylesheet to restore the classic UI. */
+:root {
+  color-scheme: dark;
+  --studio-bg: #101113;
+  --studio-panel: #191b1e;
+  --studio-raised: #22252a;
+  --studio-field: #121416;
+  --studio-line: #303339;
+  --studio-text: #e1e3e7;
+  --studio-muted: #959ba6;
+  --studio-accent: #ed83aa;
+  --studio-accent-wash: #ed83aa16;
+  --studio-radius: 12px;
+  --studio-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --studio-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+body {
+  background: var(--studio-bg);
+}
+#app-window {
+  background: var(--studio-bg);
+  color: var(--studio-text);
+  font-family: var(--studio-font);
+}
+#app-window .top-controls {
+  height: 52px;
+  line-height: 52px;
+  background: #15171a;
+  border-bottom: 1px solid #ffffff08;
+  box-sizing: border-box;
+}
+#app-window .top-controls .logo {
+  background: transparent;
+  padding: 14px 12px;
+  gap: 3px;
+  width: 23px;
+  margin-right: 0;
+}
+#app-window .top-controls .logo div {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+#app-window .top-controls .logo-text {
+  font: 600 14px var(--studio-font);
+  letter-spacing: 2px;
+  gap: 10px;
+}
+#app-window .top-controls .version {
+  color: var(--studio-muted);
+  font: 10px var(--studio-font);
+  letter-spacing: 0;
+}
+#app-window .top-controls .titlebar-search {
+  height: 30px;
+  width: min(320px, calc(100% - 460px));
+}
+#app-window .titlebar-search input {
+  height: 30px;
+  background: #0e1012;
+  border: 1px solid #ffffff0c;
+  border-radius: 9px;
+  padding-left: 32px;
+  font: 12px var(--studio-font);
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
+}
+#app-window .titlebar-search::before {
+  content: '\f002';
+  font-family: 'Line Awesome Free';
+  font-weight: 900;
+  position: absolute;
+  left: 11px;
+  color: var(--studio-muted);
+  pointer-events: none;
+}
+#app-window .titlebar-search input:focus {
+  border-color: #ed83aa80;
+  background: #17191d;
+  box-shadow: 0 0 0 3px var(--studio-accent-wash);
+}
+#app-window .titlebar-search-clear {
+  border-radius: 6px;
+  right: 3px;
+}
+#app-window .top-controls .window-control {
+  background: transparent;
+  color: var(--studio-muted);
+  height: 32px;
+  margin: 10px 3px;
+  padding: 0 11px;
+  border-radius: 8px;
+}
+#app-window .top-controls .window-control:hover {
+  background: var(--studio-raised);
+  color: white;
+}
+#app-window .top-controls .window-control.close-btn:hover {
+  background: #a93449;
+}
+#app-window .canvas-container {
+  top: 64px;
+  bottom: 58px;
+  left: 60px;
+  right: 60px;
+}
+#app-window .canvas-container.locked-left {
+  left: 280px;
+}
+#app-window .canvas-container.locked-right {
+  right: 280px;
+}
+#app-window #texture {
+  border-color: #ffffff16;
+  box-shadow: 0 14px 44px #00000055;
+}
+#app-window .sidebar,
+#app-window .sidebar2 {
+  top: 62px;
+  bottom: 54px;
+  background: var(--studio-panel);
+  border-radius: var(--studio-radius);
+  box-shadow:
+    0 0 0 1px #ffffff09,
+    0 8px 28px #00000024;
+}
+#app-window .sidebar {
+  left: 8px;
+}
+#app-window .sidebar2 {
+  right: 8px;
+}
+#app-window .sidebar .tabs,
+#app-window .sidebar2 .tabs {
+  background: var(--studio-panel);
+  border-color: #ffffff08;
+  border-radius: var(--studio-radius);
+  padding-top: 5px;
+  padding-bottom: 5px;
+  box-sizing: border-box;
+}
+#app-window .tabs .tab,
+#app-window .toggle-locked {
+  width: 32px;
+  height: 34px;
+  line-height: 34px;
+  margin: 3px 5px;
+  border-radius: 8px;
+  font-size: 19px;
+  color: var(--studio-muted);
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+#app-window .toggle-locked {
+  margin-top: auto;
+}
+#app-window .tabs .tab:hover,
+#app-window .toggle-locked:hover {
+  background: var(--studio-raised);
+  color: var(--studio-text);
+}
+#app-window .tabs .tab.active {
+  color: var(--studio-accent);
+  background: var(--studio-accent-wash);
+  box-shadow: inset 0 0 0 1px #ed83aa12;
+}
+#app-window
+  .sidebar
+  :is(.item-settings, .texture-settings, .generation-settings, .ai-settings, .search),
+#app-window .sidebar2 .colors {
+  background: var(--studio-panel);
+  border-radius: var(--studio-radius);
+  transition:
+    margin-left 180ms var(--studio-ease),
+    margin-right 180ms var(--studio-ease);
+}
+#app-window .sidebar .title {
+  font: 600 12px var(--studio-font);
+  letter-spacing: 0.02em;
+  color: var(--studio-text);
+  padding: 14px 0 6px;
+  margin-top: 6px;
+}
+#app-window .sidebar-width-resizer::after {
+  background: #ffffff10;
+}
+#app-window .sidebar-width-resizer:hover::after {
+  background: var(--studio-accent);
+}
+#app-window .sidebar .item-search-resizer {
+  background: var(--studio-bg);
+  border-color: #ffffff09;
+}
+#app-window .custom-input {
+  padding: 9px 14px;
+  gap: 5px;
+}
+#app-window .custom-input .name {
+  font: 500 11px/18px var(--studio-font);
+  color: var(--studio-muted);
+}
+#app-window .custom-input :is(input:not([data-select-input]), textarea, select) {
+  box-sizing: border-box;
+  border: 1px solid #ffffff09;
+  border-radius: 7px;
+  background: var(--studio-field);
+  color: var(--studio-text);
+  min-height: 30px;
+  padding: 5px 8px;
+  font:
+    12px/18px 'JetBrains Mono',
+    monospace;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+#app-window .custom-input input:focus,
+#app-window .custom-input textarea:focus {
+  border-color: #ed83aa70;
+  box-shadow: 0 0 0 2px var(--studio-accent-wash);
+}
+#app-window .custom-input .row {
+  gap: 5px;
+}
+#app-window .custom-input .row .btn {
+  background: var(--studio-raised);
+  border-radius: 6px;
+  color: var(--studio-text);
+  font-family: var(--studio-font);
+}
+#app-window .custom-input,
+#app-window .custom-input [data-assembled-select],
+[data-select-popover] {
+  --vs-border-radius: 7px;
+  --vs-font-family: var(--studio-font);
+  --vs-font-size: 12px;
+  --vs-padding-x: 8px;
+  --vs-padding-y: 4px;
+  --vs-min-height: 30px;
+  --vs-text-color: var(--studio-text);
+  --vs-background-color: var(--studio-field);
+  --vs-disabled-background-color: var(--studio-field);
+  --vs-border: 1px solid #ffffff09;
+  --vs-menu-background-color: #202328;
+  --vs-menu-border: 1px solid var(--studio-line);
+  --vs-menu-box-shadow: 0 12px 32px #00000066;
+  --vs-menu-offset-top: 5px;
+  --vs-option-padding: 8px 10px;
+  --vs-option-background-color: #202328;
+  --vs-option-hover-background-color: #2c3036;
+  --vs-option-focused-background-color: #2c3036;
+  --vs-option-selected-background-color: #393039;
+  --vs-option-text-color: var(--studio-text);
+  --vs-option-selected-text-color: #ffc5db;
+  border-bottom: none;
+}
+#app-window :is(.new-file, .synchronize, .overwrite, .desynchronize, .overwrite-confirmation) {
+  box-sizing: border-box;
+  border: 1px solid var(--studio-line);
+  border-radius: 8px;
+  background: var(--studio-raised);
+  color: var(--studio-text);
+  padding: 9px 10px;
+  font: 500 12px/18px var(--studio-font);
+  transition: background-color 140ms ease;
+}
+#app-window .synchronize {
+  color: #f3bfd3;
+  background: #ed83aa18;
+  border-color: #ed83aa30;
+}
+#app-window :is(.new-file, .synchronize, .overwrite, .desynchronize):hover {
+  background: #30343b;
+}
+#app-window .layers-panel .layers-panel-heading {
+  background: var(--studio-panel);
+  color: var(--studio-muted);
+  border-color: #ffffff08;
+  font: 600 11px/17px var(--studio-font);
+}
+#app-window .layers-panel .layers-search-count {
+  background: var(--studio-raised);
+  padding: 1px 6px;
+  border-radius: 5px;
+  color: var(--studio-text);
+}
+#app-window .layer-item {
+  font: 12px var(--studio-font);
+  border-top: none;
+  box-shadow: none;
+}
+#app-window .layer-item > .main-info {
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 5px 12px;
+  gap: 8px;
+  margin: 1px 5px;
+  border-radius: 7px;
+  transition: background-color 120ms ease;
+}
+#app-window .layer-item > .main-info:hover {
+  background: #ffffff06;
+}
+#app-window .layer-item.is-selected {
+  background: transparent;
+}
+#app-window .layer-item.is-selected > .main-info {
+  background: #ed83aa14;
+  color: #f6dbe6;
+}
+#app-window .layer-item .main-info .preview {
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px #ffffff14;
+}
+#app-window .layer-item .main-info .layer-edit {
+  font: 12px var(--studio-font);
+  border-bottom-color: var(--studio-accent);
+}
+#app-window .layer-item .childs {
+  margin-left: 16px;
+  border-left: 1px solid #ffffff07;
+}
+#app-window .layer-item.is-search-match > .main-info > span {
+  border-radius: 4px;
+  background: #ed83aa22;
+  color: #ffc4da;
+}
+#app-window .layers-panel .layers-panel-controls {
+  background: var(--studio-panel);
+  gap: 4px;
+  padding: 5px;
+  box-sizing: border-box;
+}
+#app-window .layers-panel-controls > div {
+  height: 30px;
+  border: none;
+  border-radius: 7px;
+  background: var(--studio-raised);
+  color: var(--studio-muted);
+}
+#app-window .layers-panel-controls > div:first-child {
+  border-right: none;
+}
+#app-window .layers-panel-controls > div:hover {
+  color: var(--studio-text);
+  background: #30343b;
+}
+#app-window .draggable-color {
+  background: transparent;
+  border-bottom: none;
+  border-radius: 10px;
+  margin: 3px 0;
+  padding-bottom: 7px;
+}
+#app-window .pico {
+  background: #202328;
+  border-radius: 10px;
+  padding: 7px;
+  box-shadow: inset 0 0 0 1px #ffffff07;
+}
+#app-window .pico .color-area {
+  border-radius: 6px;
+}
+#app-window .pico .color-area :is(.white, .black) {
+  border-radius: inherit;
+}
+#app-window .pico .preview,
+#app-window .pico .preview .color {
+  border-radius: 6px;
+}
+#app-window .pico .inputs input {
+  background: #131518;
+  color: var(--studio-text);
+  border-radius: 5px;
+  font-size: 10px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+#app-window .pico .mode-name {
+  color: var(--studio-muted);
+  font: 10px var(--studio-font);
+}
+#app-window .pico .hue-horizontal,
+#app-window .pico .alpha-horizontal,
+#app-window .pico .gradient {
+  border-radius: 5px;
+}
+#app-window .draggable-color.selected > div {
+  box-shadow: inset 0 0 0 1px #ed83aa55;
+}
+#app-window .sidebar2 .colors .bottom-buttons {
+  gap: 5px;
+  padding: 5px;
+  background: var(--studio-panel);
+}
+#app-window .sidebar2 .colors :is(.add-color, .generate-colors) {
+  height: 32px;
+  border: none;
+  border-radius: 7px;
+  background: var(--studio-raised);
+  color: var(--studio-muted);
+}
+#app-window .footer {
+  height: 42px;
+  background: #141619;
+  border-top: 1px solid #ffffff08;
+}
+#app-window .footer :is(.left-btn, .right-btn) {
+  width: 32px;
+  height: 30px;
+  line-height: 30px;
+  margin: 5px 13px;
+  border-radius: 7px;
+  color: var(--studio-muted);
+  font-size: 16px;
+  transition: background-color 140ms ease;
+}
+#app-window .footer :is(.left-btn, .right-btn):hover {
+  background: var(--studio-raised);
+}
+#app-window .footer :is(.left-btn, .right-btn).active {
+  background: var(--studio-accent-wash);
+  color: var(--studio-accent);
+}
+#app-window .footer .center {
+  gap: 14px;
+  color: var(--studio-muted);
+  font: 10px var(--studio-font);
+  font-variant-numeric: tabular-nums;
+}
+#app-window .footer .status-divider {
+  width: 1px;
+  height: 10px;
+  background: var(--studio-line);
+}
+#app-window .footer .document-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+#app-window .footer .document-status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #777e89;
+}
+#app-window .footer .document-status.synced::before {
+  background: #8fbdac;
+}
+#app-window .color-offset-slider {
+  bottom: 43px;
+  height: 36px;
+  left: 290px;
+  right: 290px;
+  z-index: 1;
+  pointer-events: none;
+}
+#app-window .color-offset-slider-container {
+  max-width: 440px;
+  border-radius: 10px;
+  background: #191b1ef2;
+  border: 1px solid #ffffff0c;
+  padding: 1px 14px;
+  box-shadow: 0 4px 16px #00000030;
+  pointer-events: auto;
+}
+#app-window .vue-slider-process {
+  background: var(--studio-accent) !important;
+}
+#app-window .vue-slider-rail {
+  background: #343841 !important;
+}
+#app-window .vue-slider-dot-handle {
+  border: 2px solid #e1e3e7;
+  border-radius: 50% !important;
+  box-shadow: 0 1px 4px #00000050;
+}
+#app-window .mcp-workspace {
+  inset: 62px 8px 8px 58px;
+  background: var(--studio-bg);
+  border-radius: 12px;
+}
+#app-window :is(.mcp-path-card, .mcp-client-card, .mcp-footer-note) {
+  background: var(--studio-panel);
+  border-color: var(--studio-line);
+  border-radius: 14px;
+}
+#app-window .mcp-client-card-primary {
+  border-color: #ed83aa40;
+}
+#app-window .mcp-page {
+  font-family: var(--studio-font);
+}
+#app-window .mcp-page :is(button, pre, details, .mcp-value) {
+  border-radius: 8px;
+}
+#app-window .mcp-page-header h1 {
+  letter-spacing: -0.8px;
+}
+#app-window :is(button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--studio-accent) !important;
+  outline-offset: 2px;
+}
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+  box-shadow: none;
+}
+::-webkit-scrollbar-thumb {
+  background: #50555f;
+  border-radius: 5px;
+  outline: none;
+}
+@media (max-width: 850px) {
+  #app-window .top-controls .version {
+    display: none;
+  }
+  #app-window .top-controls .titlebar-search {
+    width: min(280px, calc(100% - 300px));
+  }
+  #app-window .color-offset-slider {
+    left: 70px;
+    right: 70px;
+  }
+  #app-window .footer .document-status {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #app-window *,
+  #app-window *::before,
+  #app-window *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+#app-window .toggle-locked.center-active {
+  color: var(--studio-accent);
+}
+
+#app-window .overwrite-confirmation :is(.confirm, .cancel) {
+  float: none;
+  flex: 1;
+  width: auto;
+  margin: 0;
+  padding: 7px;
+  border-radius: 6px;
+  font-family: var(--studio-font);
+}
+#app-window .overwrite-confirmation .confirm {
+  background: #723549;
+  color: #ffe3ed;
+}
+#app-window .overwrite-confirmation .cancel {
+  background: var(--studio-raised);
+  color: var(--studio-text);
+}
+#app-window .pico .remove-color:hover,
+#app-window .layers-panel-controls .remove-layer:hover {
+  color: #ff9ca9;
+}
+
+/* Keep one checker cell equal to the snapping step, without brightening the workspace. */
+#app-window #texture {
+  background-image: conic-gradient(#303338 25%, #24272b 0 50%, #303338 0 75%, #24272b 0);
+  background-size: calc(var(--checker-size) / 10) calc(var(--checker-size) / 10);
+}
+#app-window :is(.mcp-eyebrow, .mcp-client-kicker) {
+  color: var(--studio-accent);
+}
+#app-window .mcp-page button {
+  background: var(--studio-raised);
+  border-color: var(--studio-line);
+  color: var(--studio-text);
+}
+#app-window :is(input, textarea, select):focus-visible {
+  outline-width: 1px !important;
+  outline-offset: 0;
+  box-shadow: none;
+}

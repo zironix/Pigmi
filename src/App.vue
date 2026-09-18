@@ -193,6 +193,7 @@
       <div class="tabs">
         <div
           class="tab"
+          title="Item settings"
           @click="handleTabClick('item')"
           v-if="selected !== false"
           :class="{ active: isTabActive('item') }"
@@ -201,6 +202,7 @@
         </div>
         <div
           class="tab"
+          title="Layers"
           @click="handleTabClick('search')"
           :class="{ active: isTabActive('search') }"
         >
@@ -208,6 +210,7 @@
         </div>
         <div
           class="tab"
+          title="Document & export"
           @click="handleTabClick('texture')"
           :class="{ active: current_tab == 'texture' && !isItemSearchSplitVisible }"
         >
@@ -215,6 +218,7 @@
         </div>
         <div
           class="tab"
+          title="Palette generation"
           @click="handleTabClick('generation')"
           :class="{ active: current_tab == 'generation' && !isItemSearchSplitVisible }"
         >
@@ -783,8 +787,13 @@
         <div class="tab" :class="{ active: selected !== false }">
           <i class="las la-palette"></i>
         </div>
-        <div class="toggle-locked" @click="toggleCenterLock">
-          <i v-if="!texture.center_locked" class="las la-compress-arrows-alt"></i>
+        <div
+          class="toggle-locked"
+          @click="toggleCenterLock"
+          :title="texture.center_locked ? 'Release canvas centering' : 'Center canvas'"
+          :class="{ 'center-active': texture.center_locked }"
+        >
+          <i class="las la-compress-arrows-alt"></i>
         </div>
       </div>
     </div>
@@ -797,7 +806,18 @@
         <i class="las la-lock-open" v-if="!texture.locked_left"></i>
         <i class="las la-lock" v-else></i>
       </div>
-      <div class="center"></div>
+      <div class="center">
+        <span>{{ texture.width }} × {{ texture.height }}</span>
+        <span class="status-divider" aria-hidden="true"></span>
+        <span>{{ Math.round(finalZoom * 100) }}%</span>
+        <span class="status-divider" aria-hidden="true"></span>
+        <span
+          >{{ texture.items.length }} {{ texture.items.length === 1 ? 'layer' : 'layers' }}</span
+        >
+        <span class="document-status" :class="{ synced: sync }">{{
+          sync ? 'Auto-save on' : 'Auto-save off'
+        }}</span>
+      </div>
       <div
         class="right-btn"
         :class="{ active: texture.locked_right }"
@@ -811,3 +831,4 @@
 </template>
 <script src="./app/appOptions.js"></script>
 <style src="./styles/app.css"></style>
+<style src="./styles/studio.css"></style>
