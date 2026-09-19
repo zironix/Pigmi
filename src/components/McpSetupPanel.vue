@@ -1,4 +1,5 @@
 <script setup>
+import { scrollFade as vScrollFade } from '../directives/scrollFade';
 import { onBeforeUnmount, ref } from 'vue';
 
 defineProps({
@@ -43,7 +44,7 @@ onBeforeUnmount(() => clearTimeout(copiedTimer));
 </script>
 
 <template>
-  <main class="mcp-workspace">
+  <main class="mcp-workspace" v-scroll-fade>
     <div class="mcp-page">
       <header class="mcp-page-header">
         <div>

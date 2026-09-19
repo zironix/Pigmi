@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { app, BrowserWindow, Menu } from 'electron';
+import { app, BrowserWindow, Menu, shell } from 'electron';
 import { shouldShowEditContextMenu } from './contextMenu';
 
 export function createMainWindow({ devServerUrl, rendererName }) {
@@ -15,6 +15,17 @@ export function createMainWindow({ devServerUrl, rendererName }) {
       preload: path.join(__dirname, 'preload.js'),
     },
     width: 1200,
+  });
+
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    const addonUrl =
+      'https://github.com/zironix/Pigmi/blob/main/Pigmi%20Helpers/pigmi_uv2palette.py';
+    if (url === addonUrl) {
+      void shell
+        .openExternal(url)
+        .catch((error) => console.error('Could not open add-on page', error));
+    }
+    return { action: 'deny' };
   });
 
   if (process.platform === 'darwin') {

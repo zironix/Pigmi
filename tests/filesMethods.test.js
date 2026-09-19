@@ -102,6 +102,7 @@ describe('file loading', () => {
         queueMicrotask(() => this.onload());
       }
     };
+    const drawSelectionMarkers = vi.fn();
     const ctx = { drawImage: vi.fn() };
     const ctxAlbedo = { drawImage: vi.fn() };
     const ctxEmission = { drawImage: vi.fn(), getImageData: vi.fn(() => ({ pixels: true })) };
@@ -111,6 +112,7 @@ describe('file loading', () => {
       selected_file: 'main.json',
       slash: '/',
       texture: { width: 2048, height: 2048, mix_preview: 1, save_albedo: 1 },
+      drawSelectionMarkers,
       finalZoom: 0.5,
       canvas_albedo: {
         toBlob(callback) {
@@ -129,6 +131,10 @@ describe('file loading', () => {
     expect(URL.createObjectURL).toHaveBeenCalledOnce();
     expect(ctxAlbedo.drawImage).toHaveBeenCalledOnce();
     expect(ctx.drawImage).toHaveBeenCalledWith(expect.anything(), 0, 0, 1024, 1024);
+    expect(drawSelectionMarkers).toHaveBeenCalledOnce();
+    expect(drawSelectionMarkers.mock.invocationCallOrder[0]).toBeGreaterThan(
+      ctx.drawImage.mock.invocationCallOrder[0],
+    );
     expect(writeBinaryFile).toHaveBeenCalledWith(
       '/project/main_albedo.png',
       expect.any(ArrayBuffer),

@@ -1,7 +1,15 @@
 <template>
   <div
     id="app-window"
-    :class="{ 'mcp-view-active': current_tab === 'mcp' }"
+    :style="{ '--studio-sidebar-width': `${sidebarWidth}px` }"
+    :class="{
+      'mcp-view-active': current_tab === 'mcp',
+      'settings-view-active': current_tab === 'texture' && !isItemSearchSplitVisible,
+    }"
+    @pointerdown.capture="pushUndoSnapshot"
+    @focusin.capture="pushUndoSnapshot"
+    @change="addUndo"
+    @pointerup="addUndo"
     @keyup="addUndo"
     @click="addUndo('click')"
     @dragend="addUndo"
@@ -92,6 +100,7 @@
     <div
       ref="canvasContainer"
       class="canvas-container"
+      @mousedown.capture="handleCanvasBackgroundDown"
       @contextmenu.prevent
       @wheel="mousewheel"
       :class="{
@@ -112,6 +121,44 @@
         @mouseleave="mouseLeave"
         :style="canvasStyle"
       />
+      <svg
+        ref="selectionOverlay"
+        class="canvas-selection-overlay"
+        :style="canvasStyle"
+        :viewBox="`0 0 ${texture.width} ${texture.height}`"
+        aria-hidden="true"
+        :class="{ 'items-in-motion': movingItemPreviews.length > 0 }"
+      >
+        <svg :width="texture.width" :height="texture.height" overflow="hidden">
+          <image
+            v-for="item in movingCanvasItems"
+            :key="item.id"
+            :href="item.url"
+            :width="item.width"
+            :height="item.height"
+            :style="{ transform: `translate(${item.x}px, ${item.y}px)` }"
+          />
+        </svg>
+        <circle
+          v-for="marker in canvasSelectionMarkers"
+          :key="marker.id"
+          :style="{ transform: `translate(${marker.x}px, ${marker.y}px)` }"
+          :r="4 / finalZoom"
+          :fill="marker.active ? 'var(--studio-accent)' : '#858585'"
+          stroke="white"
+          :stroke-width="1 / finalZoom"
+        />
+        <rect
+          v-if="canvasSelectionBox"
+          class="canvas-selection-box"
+          :class="{ subtract: boxSelection.mode === 'subtract' }"
+          :x="canvasSelectionBox.x"
+          :y="canvasSelectionBox.y"
+          :width="canvasSelectionBox.width"
+          :height="canvasSelectionBox.height"
+          :stroke-width="1 / finalZoom"
+        />
+      </svg>
       <canvas
         id="albedo_texture"
         ref="albedo_texture"
@@ -165,7 +212,7 @@
         texture.items[selected].type === 'g'
       "
     >
-      <div class="color-offset-slider-container">
+      <div class="color-offset-slider-container" :style="{ '--stop-gradient': colorStopGradient }">
         <vue-slider
           v-model="texture.items[selected].color_offsets"
           :max="100"
@@ -187,7 +234,11 @@
     <div
       ref="leftSidebar"
       class="sidebar"
-      :class="{ 'split-item-search': isItemSearchSplitVisible, 'left-locked': texture.locked_left }"
+      :class="{
+        'split-item-search': isItemSearchSplitVisible,
+        'left-locked': texture.locked_left,
+        resizing: isSidebarResizing || isItemSearchResizing,
+      }"
       :style="leftSidebarStyle"
     >
       <div class="tabs">
@@ -210,19 +261,19 @@
         </div>
         <div
           class="tab"
-          title="Document & export"
-          @click="handleTabClick('texture')"
-          :class="{ active: current_tab == 'texture' && !isItemSearchSplitVisible }"
-        >
-          <i class="las la-sliders-h"></i>
-        </div>
-        <div
-          class="tab"
           title="Palette generation"
           @click="handleTabClick('generation')"
           :class="{ active: current_tab == 'generation' && !isItemSearchSplitVisible }"
         >
           <i class="las la-meteor"></i>
+        </div>
+        <div
+          class="tab"
+          title="Document & export"
+          @click="handleTabClick('texture')"
+          :class="{ active: current_tab == 'texture' && !isItemSearchSplitVisible }"
+        >
+          <i class="las la-sliders-h"></i>
         </div>
         <div
           class="tab"
@@ -239,175 +290,191 @@
         v-if="selected !== false && (current_tab === 'item' || isItemSearchSplitVisible)"
         :class="{ locked: texture.locked_left }"
       >
-        <div class="custom-input">
-          <div class="name">Name</div>
-          <input type="text" v-model="texture.items[selected].name" placeholder="Item name" />
-        </div>
-        <div
-          class="custom-input"
-          v-if="
-            texture.items[selected].type === 'sg' && !Array.isArray(texture.items[selected].size)
-          "
-        >
-          <div class="name">Size</div>
-          <vue-slider v-model.number="texture.items[selected].size" />
-          <input type="number" v-model.number="texture.items[selected].size" />
-        </div>
-        <div class="custom-input" v-if="texture.items[selected].type === 'sg'">
-          <div class="name">Number of steps</div>
-          <vue-slider v-model.number="texture.items[selected].steps" :max="texture.max_item_size" />
-          <input type="number" v-model.number="texture.items[selected].steps" />
-        </div>
-        <div class="custom-input" v-if="texture.items[selected].type === 'g'">
-          <div class="name">Width</div>
-          <vue-slider v-model="texture.items[selected].size[0]" :max="texture.max_item_size" />
-          <input
-            type="text"
-            v-model="texture.items[selected].size[0]"
-            @keydown.enter="
-              texture.items[selected].size[0] = evaluateInput(texture.items[selected].size[0])
-            "
-          />
-        </div>
-        <div class="custom-input" v-if="texture.items[selected].type === 'g'">
-          <div class="name">Height</div>
-          <vue-slider v-model="texture.items[selected].size[1]" :max="texture.max_item_size" />
-          <input
-            type="text"
-            v-model="texture.items[selected].size[1]"
-            @keydown.enter="
-              texture.items[selected].size[1] = evaluateInput(texture.items[selected].size[1])
-            "
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Type</div>
+        <div class="settings-scroll" v-scroll-fade>
+          <section class="settings-category">
+            <h3>Geometry</h3>
+            <div class="custom-input">
+              <div class="name">Name</div>
+              <input type="text" v-model="texture.items[selected].name" placeholder="Item name" />
+            </div>
+            <div
+              class="custom-input"
+              v-if="
+                texture.items[selected].type === 'sg' &&
+                !Array.isArray(texture.items[selected].size)
+              "
+            >
+              <div class="name">Size</div>
+              <vue-slider v-model.number="texture.items[selected].size" />
+              <input type="number" v-model.number="texture.items[selected].size" />
+            </div>
+            <div class="custom-input" v-if="texture.items[selected].type === 'sg'">
+              <div class="name">Number of steps</div>
+              <vue-slider
+                v-model.number="texture.items[selected].steps"
+                :max="texture.max_item_size"
+              />
+              <input type="number" v-model.number="texture.items[selected].steps" />
+            </div>
+            <div class="custom-input" v-if="texture.items[selected].type === 'g'">
+              <div class="name">Width</div>
+              <vue-slider v-model="texture.items[selected].size[0]" :max="texture.max_item_size" />
+              <input
+                type="text"
+                v-model="texture.items[selected].size[0]"
+                @keydown.enter="
+                  texture.items[selected].size[0] = evaluateInput(texture.items[selected].size[0])
+                "
+              />
+            </div>
+            <div class="custom-input" v-if="texture.items[selected].type === 'g'">
+              <div class="name">Height</div>
+              <vue-slider v-model="texture.items[selected].size[1]" :max="texture.max_item_size" />
+              <input
+                type="text"
+                v-model="texture.items[selected].size[1]"
+                @keydown.enter="
+                  texture.items[selected].size[1] = evaluateInput(texture.items[selected].size[1])
+                "
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Type</div>
 
-          <VueSelect
-            v-model="texture.items[selected].type"
-            :options="[
-              { label: 'Step gradient', value: 'sg' },
-              { label: 'Gradient', value: 'g' },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Shape</div>
+              <VueSelect
+                v-model="texture.items[selected].type"
+                :options="[
+                  { label: 'Step gradient', value: 'sg' },
+                  { label: 'Gradient', value: 'g' },
+                ]"
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Shape</div>
 
-          <VueSelect
-            v-model="texture.items[selected].shape"
-            :options="[
-              { label: 'Linear', value: 'l' },
-              { label: 'Radial', value: 'r' },
-              { label: 'Conic', value: 'c' },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Direction</div>
+              <VueSelect
+                v-model="texture.items[selected].shape"
+                :options="[
+                  { label: 'Linear', value: 'l' },
+                  { label: 'Radial', value: 'r' },
+                  { label: 'Conic', value: 'c' },
+                ]"
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Direction</div>
 
-          <VueSelect
-            v-model="texture.items[selected].direction"
-            :options="[
-              { label: 'Horizontal', value: 'horizontal' },
-              { label: 'Vertical', value: 'vertical' },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Color mode</div>
+              <VueSelect
+                v-model="texture.items[selected].direction"
+                :options="[
+                  { label: 'Horizontal', value: 'horizontal' },
+                  { label: 'Vertical', value: 'vertical' },
+                ]"
+              />
+            </div>
+          </section>
+          <section class="settings-category">
+            <h3>Material</h3>
+            <div class="custom-input">
+              <div class="name">Color mode</div>
 
-          <VueSelect
-            v-model="texture.items[selected].color_mode"
-            :options="[
-              { label: 'RGB', value: 'rgb' },
-              { label: 'HSL', value: 'hsl' },
-              ...(texture.items[selected]?.type === 'sg'
-                ? [{ label: 'Black To White', value: 'black_to_white' }]
-                : []),
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Albedo</div>
+              <VueSelect
+                v-model="texture.items[selected].color_mode"
+                :options="[
+                  { label: 'RGB', value: 'rgb' },
+                  { label: 'HSL', value: 'hsl' },
+                  ...(texture.items[selected]?.type === 'sg'
+                    ? [{ label: 'Black To White', value: 'black_to_white' }]
+                    : []),
+                ]"
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Albedo</div>
 
-          <VueSelect
-            v-model="texture.items[selected].albedo"
-            :options="[
-              { label: 'Disabled', value: 0 },
-              { label: 'Enabled', value: 1 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Emission</div>
+              <VueSelect
+                v-model="texture.items[selected].albedo"
+                :options="[
+                  { label: 'Disabled', value: 0 },
+                  { label: 'Enabled', value: 1 },
+                ]"
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Emission</div>
 
-          <VueSelect
-            v-model="texture.items[selected].emission"
-            :options="[
-              { label: 'Disabled', value: 0 },
-              { label: 'Enabled', value: 1 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Roughness</div>
-          <vue-slider v-model="texture.items[selected].roughness" :max="100" />
-          <input
-            type="text"
-            v-model="texture.items[selected].roughness"
-            @keydown.enter="
-              texture.items[selected].roughness = evaluateInput(texture.items[selected].roughness)
-            "
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Metallic</div>
-          <vue-slider v-model="texture.items[selected].metallic" :max="100" />
-          <input
-            type="text"
-            v-model="texture.items[selected].metallic"
-            @keydown.enter="
-              texture.items[selected].metallic = evaluateInput(texture.items[selected].metallic)
-            "
-          />
-        </div>
-        <div class="custom-input" v-if="texture.items[selected].emission">
-          <div class="name">Emission strength</div>
-          <vue-slider v-model="texture.items[selected].emission_strength" :max="100" />
-          <input
-            type="text"
-            v-model="texture.items[selected].emission_strength"
-            @keydown.enter="
-              texture.items[selected].emission_strength = evaluateInput(
-                texture.items[selected].emission_strength,
-              )
-            "
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Clearcoat</div>
-          <vue-slider v-model="texture.items[selected].clearcoat" :max="100" />
-          <input
-            type="text"
-            v-model="texture.items[selected].clearcoat"
-            @keydown.enter="
-              texture.items[selected].clearcoat = evaluateInput(texture.items[selected].clearcoat)
-            "
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Clearcoat roughness</div>
-          <vue-slider v-model="texture.items[selected].clearcoat_roughness" :max="100" />
-          <input
-            type="text"
-            v-model="texture.items[selected].clearcoat_roughness"
-            @keydown.enter="
-              texture.items[selected].clearcoat_roughness = evaluateInput(
-                texture.items[selected].clearcoat_roughness,
-              )
-            "
-          />
+              <VueSelect
+                v-model="texture.items[selected].emission"
+                :options="[
+                  { label: 'Disabled', value: 0 },
+                  { label: 'Enabled', value: 1 },
+                ]"
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Roughness</div>
+              <vue-slider v-model="texture.items[selected].roughness" :max="100" />
+              <input
+                type="text"
+                v-model="texture.items[selected].roughness"
+                @keydown.enter="
+                  texture.items[selected].roughness = evaluateInput(
+                    texture.items[selected].roughness,
+                  )
+                "
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Metallic</div>
+              <vue-slider v-model="texture.items[selected].metallic" :max="100" />
+              <input
+                type="text"
+                v-model="texture.items[selected].metallic"
+                @keydown.enter="
+                  texture.items[selected].metallic = evaluateInput(texture.items[selected].metallic)
+                "
+              />
+            </div>
+            <div class="custom-input" v-if="texture.items[selected].emission">
+              <div class="name">Emission strength</div>
+              <vue-slider v-model="texture.items[selected].emission_strength" :max="100" />
+              <input
+                type="text"
+                v-model="texture.items[selected].emission_strength"
+                @keydown.enter="
+                  texture.items[selected].emission_strength = evaluateInput(
+                    texture.items[selected].emission_strength,
+                  )
+                "
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Clearcoat</div>
+              <vue-slider v-model="texture.items[selected].clearcoat" :max="100" />
+              <input
+                type="text"
+                v-model="texture.items[selected].clearcoat"
+                @keydown.enter="
+                  texture.items[selected].clearcoat = evaluateInput(
+                    texture.items[selected].clearcoat,
+                  )
+                "
+              />
+            </div>
+            <div class="custom-input">
+              <div class="name">Clearcoat roughness</div>
+              <vue-slider v-model="texture.items[selected].clearcoat_roughness" :max="100" />
+              <input
+                type="text"
+                v-model="texture.items[selected].clearcoat_roughness"
+                @keydown.enter="
+                  texture.items[selected].clearcoat_roughness = evaluateInput(
+                    texture.items[selected].clearcoat_roughness,
+                  )
+                "
+              />
+            </div>
+          </section>
         </div>
       </div>
 
@@ -417,234 +484,6 @@
         :class="{ locked: texture.locked_left }"
         @mousedown.prevent="startItemSearchResize"
       ></div>
-
-      <div
-        class="texture-settings"
-        v-if="current_tab === 'texture' && !isItemSearchSplitVisible"
-        :class="{ locked: texture.locked_left }"
-      >
-        <div class="custom-input">
-          <div v-if="folder_path" class="name with-icon" style="display: flex; align-items: center">
-            Folder path
-            <i class="las la-external-link-square-alt" @click="openFolderInOS(folder_path)"></i>
-          </div>
-          <input
-            type="text"
-            v-model="folder_path"
-            @click="selectFolder"
-            placeholder="Select folder..."
-          />
-        </div>
-        <div class="custom-input" v-if="folder_path">
-          <div class="name">Texture name</div>
-          <input type="text" v-model="texture_name" placeholder="Enter name" />
-          <div class="new-file" @click="newTexture()">Create</div>
-        </div>
-        <div class="custom-input" v-if="folder_path">
-          <div class="name">Select texture JSON</div>
-
-          <VueSelect
-            v-model="selected_file"
-            :options="files_in_folder?.map((f) => ({ label: f, value: f })) || []"
-          />
-        </div>
-        <div class="custom-input" v-if="selected_file && folder_path">
-          <div class="synchronize" v-if="sync == false" @click="loadAndSync()">Load and sync</div>
-          <div
-            class="overwrite"
-            v-if="sync == false && !overwrite_confirmation"
-            @click="overwrite_confirmation = 1"
-          >
-            Overwrite and sync
-          </div>
-          <div class="overwrite-confirmation" v-if="sync == false && overwrite_confirmation">
-            <div class="confirm" @click="overwriteAndSync()">Overwrite</div>
-            <div class="cancel" @click="overwrite_confirmation = 0">Cancel</div>
-          </div>
-          <div class="desynchronize" v-if="sync == true" @click="sync = false">Desynchronize</div>
-        </div>
-        <div class="custom-input">
-          <div class="name">Texture width (px)</div>
-          <input
-            type="text"
-            v-model="texture.width"
-            @keydown.enter="texture.width = evaluateInput(texture.width)"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Texture height (px)</div>
-          <input
-            type="text"
-            v-model="texture.height"
-            @keydown.enter="texture.height = evaluateInput(texture.height)"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Max item size (px)</div>
-          <input
-            type="text"
-            v-model="texture.max_item_size"
-            @keydown.enter="texture.max_item_size = evaluateInput(texture.max_item_size)"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Snapping step (px)</div>
-          <input
-            type="text"
-            v-model="texture.step"
-            @keydown.enter="texture.step = evaluateInput(texture.step)"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Undo count</div>
-          <input
-            type="text"
-            v-model="texture.undo_count"
-            @keydown.enter="texture.undo_count = evaluateInput(texture.undo_count)"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Zoom</div>
-          <input
-            type="number"
-            v-model="texture.zoom"
-            @keydown.enter="texture.zoom = evaluateInput(texture.zoom)"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Zoom speed</div>
-          <input
-            type="number"
-            v-model="texture.zoom_speed"
-            @keydown.enter="texture.zoom_speed = evaluateInput(texture.zoom_speed)"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Default color model</div>
-          <VueSelect
-            v-model="texture.default_color_model"
-            :options="[
-              { label: 'HSV', value: 'hsva' },
-              { label: 'HSL', value: 'hsla' },
-              { label: 'RGB', value: 'rgba' },
-              { label: 'HEX', value: 'hex' },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Mass resize</div>
-          <div class="row">
-            <input type="number" placeholder="New item size" v-model.number="resize_value" />
-            <div class="btn" @click="resizeItems()">Resize</div>
-          </div>
-        </div>
-        <div class="custom-input">
-          <div class="name">Albedo texture</div>
-          <VueSelect
-            v-model="texture.save_albedo"
-            :options="[
-              { label: 'PNG', value: 1 },
-              { label: 'WEBP', value: 2 },
-              { label: 'Disabled', value: 0 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Roughness texture</div>
-          <VueSelect
-            v-model="texture.save_roughness"
-            :options="[
-              { label: 'PNG', value: 1 },
-              { label: 'WEBP', value: 2 },
-              { label: 'Disabled', value: 0 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Metallic texture</div>
-          <VueSelect
-            v-model="texture.save_metallic"
-            :options="[
-              { label: 'PNG', value: 1 },
-              { label: 'WEBP', value: 2 },
-              { label: 'Disabled', value: 0 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Emission texture</div>
-          <VueSelect
-            v-model="texture.save_emission"
-            :options="[
-              { label: 'PNG', value: 1 },
-              { label: 'WEBP', value: 2 },
-              { label: 'Disabled', value: 0 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Clearcoat texture</div>
-          <VueSelect
-            v-model="texture.save_clearcoat"
-            :options="[
-              { label: 'PNG', value: 1 },
-              { label: 'WEBP', value: 2 },
-              { label: 'Disabled', value: 0 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Clearcoat roughness texture</div>
-          <VueSelect
-            v-model="texture.save_clearcoat_roughness"
-            :options="[
-              { label: 'PNG', value: 1 },
-              { label: 'WEBP', value: 2 },
-              { label: 'Disabled', value: 0 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">MRC texture</div>
-          <VueSelect
-            v-model="texture.save_mrc"
-            :options="[
-              { label: 'PNG', value: 1 },
-              { label: 'WEBP', value: 2 },
-              { label: 'Disabled', value: 0 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Mix preview</div>
-          <VueSelect
-            v-model="texture.mix_preview"
-            :options="[
-              { label: 'Enabled', value: 1 },
-              { label: 'Disabled', value: 0 },
-            ]"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Update interval (ms)</div>
-          <input
-            type="number"
-            placeholder="New item size"
-            v-model.number="texture.update_interval"
-          />
-        </div>
-        <div class="custom-input">
-          <div class="name">Check for updates</div>
-          <VueSelect
-            v-model="updateCheckEnabled"
-            :options="[
-              { label: 'Enabled', value: 1 },
-              { label: 'Disabled', value: 0 },
-            ]"
-            @update:model-value="setUpdateCheckEnabled"
-          />
-        </div>
-      </div>
 
       <div
         class="search"
@@ -664,6 +503,7 @@
       </div>
 
       <div
+        v-scroll-fade
         class="generation-settings"
         v-if="current_tab === 'generation' && !isItemSearchSplitVisible"
         :class="{ locked: texture.locked_left }"
@@ -729,19 +569,328 @@
         :server-path="mcp.serverPath"
       />
       <div
-        v-if="current_tab !== 'mcp'"
+        v-if="current_tab !== 'mcp' && current_tab !== 'texture'"
         class="sidebar-width-resizer"
         :class="{ locked: texture.locked_left }"
         @mousedown.prevent="startSidebarResize"
       ></div>
     </div>
-    <div class="sidebar2">
+    <TextureSettingsPage v-if="current_tab === 'texture' && !isItemSearchSplitVisible">
+      <template #project>
+        <section class="settings-category project-start">
+          <span class="page-eyebrow">START HERE</span>
+          <h3>Open or create a texture</h3>
+          <p class="category-description">
+            Choose a project folder, then open an existing texture with Load and sync or create a
+            new one.
+          </p>
+          <div class="custom-input">
+            <div class="name with-icon" style="display: flex; align-items: center">
+              Choose a project folder
+              <i class="las la-external-link-square-alt" @click="openFolderInOS(folder_path)"></i>
+            </div>
+            <input
+              type="text"
+              v-model="folder_path"
+              @click="selectFolder"
+              placeholder="Select folder..."
+            />
+          </div>
+          <div class="project-columns" v-if="folder_path">
+            <section class="project-option">
+              <h4>Open an existing texture</h4>
+              <div class="custom-input">
+                <div class="name">Texture JSON</div>
+
+                <VueSelect
+                  v-model="selected_file"
+                  :options="files_in_folder?.map((f) => ({ label: f, value: f })) || []"
+                />
+              </div>
+              <div class="custom-input" v-if="selected_file && folder_path">
+                <div class="synchronize" v-if="sync == false" @click="loadAndSync()">
+                  Load and sync
+                </div>
+                <div
+                  class="overwrite"
+                  v-if="sync == false && !overwrite_confirmation"
+                  @click="overwrite_confirmation = 1"
+                >
+                  Overwrite and sync
+                </div>
+                <div class="overwrite-confirmation" v-if="sync == false && overwrite_confirmation">
+                  <div class="confirm" @click="overwriteAndSync()">Overwrite</div>
+                  <div class="cancel" @click="overwrite_confirmation = 0">Cancel</div>
+                </div>
+                <div class="desynchronize" v-if="sync == true" @click="sync = false">
+                  Desynchronize
+                </div>
+              </div>
+              <p v-if="!files_in_folder?.length" class="project-empty">
+                No textures in this folder yet. Create a new one on the right.
+              </p>
+            </section>
+            <section class="project-option">
+              <h4>Create a new texture</h4>
+              <div class="custom-input">
+                <div class="name">Name your texture</div>
+                <input type="text" v-model="texture_name" placeholder="Enter name" />
+                <button
+                  class="new-file project-create"
+                  type="button"
+                  :disabled="!texture_name.trim()"
+                  @click="newTexture()"
+                >
+                  Create texture
+                </button>
+              </div>
+            </section>
+          </div>
+          <p class="project-note">
+            Load and sync opens the selected file and saves subsequent edits automatically.
+            Overwrite and sync replaces that file with the current document.
+          </p>
+        </section>
+      </template>
+      <div class="settings-column">
+        <section class="settings-category">
+          <h3>Canvas</h3>
+          <p class="category-description">
+            Width and height define the exported texture resolution. Max item size sets the upper
+            range of the item size control.
+          </p>
+          <div class="custom-input">
+            <div class="name">Texture width (px)</div>
+            <input
+              type="text"
+              v-model="texture.width"
+              @keydown.enter="texture.width = evaluateInput(texture.width)"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Texture height (px)</div>
+            <input
+              type="text"
+              v-model="texture.height"
+              @keydown.enter="texture.height = evaluateInput(texture.height)"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Max item size (px)</div>
+            <input
+              type="text"
+              v-model="texture.max_item_size"
+              @keydown.enter="texture.max_item_size = evaluateInput(texture.max_item_size)"
+            />
+          </div>
+        </section>
+        <section class="settings-category">
+          <h3>Grid & snapping</h3>
+          <p class="category-description">
+            Snapping step controls movement increments and grid cell size. Grid appearance is a
+            workspace aid and is not included in exported maps.
+          </p>
+          <div class="custom-input">
+            <div class="name">Snapping step (px)</div>
+            <input
+              type="text"
+              v-model="texture.step"
+              @keydown.enter="texture.step = evaluateInput(texture.step)"
+            />
+          </div>
+          <GridSettings v-model="texture.grid" :step="texture.step" />
+        </section>
+      </div>
+      <div class="settings-column">
+        <section class="settings-category">
+          <h3>Editor</h3>
+          <p class="category-description">
+            Set undo history depth, zoom response and the starting color model for pickers. Mass
+            resize applies the entered size to items.
+          </p>
+          <div class="custom-input">
+            <div class="name">Undo count</div>
+            <input
+              type="text"
+              v-model="texture.undo_count"
+              @keydown.enter="texture.undo_count = evaluateInput(texture.undo_count)"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Zoom</div>
+            <input
+              type="number"
+              v-model="texture.zoom"
+              @keydown.enter="texture.zoom = evaluateInput(texture.zoom)"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Zoom speed</div>
+            <input
+              type="number"
+              v-model="texture.zoom_speed"
+              @keydown.enter="texture.zoom_speed = evaluateInput(texture.zoom_speed)"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Default color model</div>
+            <VueSelect
+              v-model="texture.default_color_model"
+              :options="[
+                { label: 'HSV', value: 'hsva' },
+                { label: 'HSL', value: 'hsla' },
+                { label: 'RGB', value: 'rgba' },
+                { label: 'HEX', value: 'hex' },
+              ]"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Mass resize</div>
+            <div class="row">
+              <input type="number" placeholder="Size change (px)" v-model.number="resize_value" />
+              <div class="btn" @click="resizeItems()">Resize</div>
+            </div>
+          </div>
+        </section>
+        <section class="settings-category">
+          <h3>Export maps</h3>
+          <p class="category-description">
+            Choose PNG, WEBP or Disabled per material channel. MRC packs metallic, roughness and
+            clearcoat into the red, green and blue channels.
+          </p>
+          <div class="custom-input">
+            <div class="name">Albedo texture</div>
+            <VueSelect
+              v-model="texture.save_albedo"
+              :options="[
+                { label: 'PNG', value: 1 },
+                { label: 'WEBP', value: 2 },
+                { label: 'Disabled', value: 0 },
+              ]"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Roughness texture</div>
+            <VueSelect
+              v-model="texture.save_roughness"
+              :options="[
+                { label: 'PNG', value: 1 },
+                { label: 'WEBP', value: 2 },
+                { label: 'Disabled', value: 0 },
+              ]"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Metallic texture</div>
+            <VueSelect
+              v-model="texture.save_metallic"
+              :options="[
+                { label: 'PNG', value: 1 },
+                { label: 'WEBP', value: 2 },
+                { label: 'Disabled', value: 0 },
+              ]"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Emission texture</div>
+            <VueSelect
+              v-model="texture.save_emission"
+              :options="[
+                { label: 'PNG', value: 1 },
+                { label: 'WEBP', value: 2 },
+                { label: 'Disabled', value: 0 },
+              ]"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Clearcoat texture</div>
+            <VueSelect
+              v-model="texture.save_clearcoat"
+              :options="[
+                { label: 'PNG', value: 1 },
+                { label: 'WEBP', value: 2 },
+                { label: 'Disabled', value: 0 },
+              ]"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Clearcoat roughness texture</div>
+            <VueSelect
+              v-model="texture.save_clearcoat_roughness"
+              :options="[
+                { label: 'PNG', value: 1 },
+                { label: 'WEBP', value: 2 },
+                { label: 'Disabled', value: 0 },
+              ]"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">MRC texture</div>
+            <VueSelect
+              v-model="texture.save_mrc"
+              :options="[
+                { label: 'PNG', value: 1 },
+                { label: 'WEBP', value: 2 },
+                { label: 'Disabled', value: 0 },
+              ]"
+            />
+          </div>
+        </section>
+        <AppearanceSettings />
+        <section class="settings-category">
+          <h3>Preview & updates</h3>
+          <p class="category-description">
+            Mix preview controls the combined preview. Update interval controls synchronization
+            timing. Automatic update checking is an application preference, separate from the
+            document.
+          </p>
+          <div class="custom-input">
+            <div class="name">Mix preview</div>
+            <VueSelect
+              v-model="texture.mix_preview"
+              :options="[
+                { label: 'Enabled', value: 1 },
+                { label: 'Disabled', value: 0 },
+              ]"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Update interval (ms)</div>
+            <input
+              type="number"
+              placeholder="New item size"
+              v-model.number="texture.update_interval"
+            />
+          </div>
+          <div class="custom-input">
+            <div class="name">Check for updates</div>
+            <VueSelect
+              v-model="updateCheckEnabled"
+              :options="[
+                { label: 'Enabled', value: 1 },
+                { label: 'Disabled', value: 0 },
+              ]"
+              @update:model-value="setUpdateCheckEnabled"
+            />
+          </div>
+        </section>
+      </div>
+    </TextureSettingsPage>
+    <div class="sidebar2" :class="{ 'right-locked': texture.locked_right }">
       <div
         class="colors"
         v-if="selected !== false && colors_visible"
         :class="{ locked: texture.locked_right }"
       >
-        <SlickList axis="y" v-model:list="texture.items[selected].colors" useDragHandle>
+        <SlickList
+          v-scroll-fade
+          class="color-list"
+          axis="y"
+          v-model:list="texture.items[selected].colors"
+          useDragHandle
+          append-to="#app-window"
+          helper-class="color-drag-helper"
+        >
           <SlickItem
             v-for="(color, index) in texture.items[selected].colors"
             :key="color.id"
@@ -775,25 +924,16 @@
           </SlickItem>
         </SlickList>
         <div class="bottom-buttons">
-          <div class="add-color" @click="addColorFromClick">
+          <div class="add-color" title="Add color" @click="addColorFromClick">
             <i class="las la-plus"></i>
           </div>
-          <div class="generate-colors" @click.exact="generateColors">
+          <div
+            class="generate-colors"
+            title="Generate palette with Huemint"
+            @click.exact="generateColors"
+          >
             <i class="las la-meteor"></i>
           </div>
-        </div>
-      </div>
-      <div class="tabs">
-        <div class="tab" :class="{ active: selected !== false }">
-          <i class="las la-palette"></i>
-        </div>
-        <div
-          class="toggle-locked"
-          @click="toggleCenterLock"
-          :title="texture.center_locked ? 'Release canvas centering' : 'Center canvas'"
-          :class="{ 'center-active': texture.center_locked }"
-        >
-          <i class="las la-compress-arrows-alt"></i>
         </div>
       </div>
     </div>
@@ -806,18 +946,17 @@
         <i class="las la-lock-open" v-if="!texture.locked_left"></i>
         <i class="las la-lock" v-else></i>
       </div>
-      <div class="center">
-        <span>{{ texture.width }} × {{ texture.height }}</span>
-        <span class="status-divider" aria-hidden="true"></span>
-        <span>{{ Math.round(finalZoom * 100) }}%</span>
-        <span class="status-divider" aria-hidden="true"></span>
-        <span
-          >{{ texture.items.length }} {{ texture.items.length === 1 ? 'layer' : 'layers' }}</span
-        >
-        <span class="document-status" :class="{ synced: sync }">{{
-          sync ? 'Auto-save on' : 'Auto-save off'
-        }}</span>
-      </div>
+      <button
+        v-if="!texture.center_locked"
+        class="center-canvas"
+        type="button"
+        @click="toggleCenterLock"
+        :title="texture.center_locked ? 'Release canvas centering' : 'Center canvas'"
+        aria-label="Center canvas"
+        :aria-pressed="texture.center_locked"
+      >
+        <i class="las la-compress-arrows-alt" aria-hidden="true"></i>
+      </button>
       <div
         class="right-btn"
         :class="{ active: texture.locked_right }"

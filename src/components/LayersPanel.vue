@@ -13,6 +13,7 @@
     </div>
     <div
       ref="itemsContainer"
+      v-scroll-fade
       class="layers-panel-items"
       @dragenter.prevent="onPanelDragEnter"
       @dragover.prevent="onPanelDragOver"
@@ -37,6 +38,7 @@
   </div>
 </template>
 <script setup lang="ts">
+import { scrollFade as vScrollFade } from '../directives/scrollFade';
 import LayersItem from './LayersItem.vue';
 import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue';
 import { cloneLayerNodesWithNewIds, moveLayerNodes } from '../utils/layerTreeOperations';

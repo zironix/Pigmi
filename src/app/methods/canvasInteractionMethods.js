@@ -75,6 +75,7 @@ export const canvasInteractionMethods = {
         }
       });
       this.drag_start_positions = positions;
+      this.beginItemMotion?.();
     }
     if (event.button === SECONDARY_MOUSE_BUTTON) {
       const idx = this.select(event, false);

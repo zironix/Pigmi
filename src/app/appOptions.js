@@ -1,3 +1,12 @@
+import AppearanceSettings from '../components/AppearanceSettings.vue';
+import { readAccentPreference, applyAccentPreference } from '../utils/accentPreference';
+import { boxSelectionMethods } from './methods/boxSelectionMethods';
+import { boxSelectionRect } from '../utils/boxSelection';
+import { itemMotionMethods } from './methods/itemMotionMethods';
+import { scrollFade } from '../directives/scrollFade';
+import TextureSettingsPage from '../components/TextureSettingsPage.vue';
+import GridSettings from '../components/GridSettings.vue';
+import { gridStyle } from '../utils/gridSettings';
 import { canvasContentSignature, normalizeCanvasItem } from '../utils/canvasRendering';
 import Colorpicker2 from '../components/Colorpicker2.vue';
 import LayersPanel from '../components/LayersPanel.vue';
@@ -28,8 +37,12 @@ import 'vue3-select-component/styles.css';
 
 export default {
   name: 'App',
+  directives: { scrollFade },
   components: {
     Colorpicker2,
+    GridSettings,
+    AppearanceSettings,
+    TextureSettingsPage,
     DragHandle,
     LayersPanel,
     McpSetupPanel,
@@ -63,7 +76,7 @@ export default {
       isItemSearchSplitVisible: false,
       itemSearchSplitRatio: 50,
       isItemSearchResizing: false,
-      sidebarWidth: 220,
+      sidebarWidth: 230,
       isSidebarResizing: false,
       lastItemSearchState: 'search',
       mcp: {
@@ -85,6 +98,8 @@ export default {
       sync: false,
       overwrite_confirmation: false,
       undo_array: [],
+      movingItemPreviews: [],
+      boxSelection: null,
       resize_value: 0,
       drag: false,
       current_color_offset_first_change: false,
@@ -175,6 +190,7 @@ export default {
     };
   },
   created() {
+    applyAccentPreference(readAccentPreference());
     this.ls = useLayersStore();
   },
   computed: {
@@ -213,7 +229,11 @@ export default {
       return {
         '--sidebar-panel-width': `${this.sidebarWidth}px`,
         ...(this.isItemSearchSplitVisible
-          ? { '--item-search-split': this.itemSearchSplitRatio }
+          ? {
+              '--item-search-split': this.itemSearchSplitRatio,
+              '--item-search-upper': `${this.itemSearchSplitRatio}fr`,
+              '--item-search-lower': `${100 - this.itemSearchSplitRatio}fr`,
+            }
           : {}),
       };
     },
@@ -228,13 +248,67 @@ export default {
       const containerHeight = container?.clientHeight ?? 0;
       return Math.round((containerHeight - this.canvasRenderedHeight) / 2);
     },
+    colorStopGradient() {
+      const item = this.texture.items[this.selected];
+      if (!item?.colors?.length) return 'none';
+      const stops = item.colors
+        .map((color, index) => {
+          const { r, g, b, a } = color.rgba;
+          const fallback = item.colors.length > 1 ? (index * 100) / (item.colors.length - 1) : 0;
+          const offset = Number(item.color_offsets?.[index] ?? fallback);
+          return {
+            position: Number.isFinite(offset) ? Math.max(0, Math.min(100, offset)) : fallback,
+            color: `rgba(${r}, ${g}, ${b}, ${a})`,
+          };
+        })
+        .sort((a, b) => a.position - b.position);
+      if (stops.length === 1) return `linear-gradient(${stops[0].color}, ${stops[0].color})`;
+      return `linear-gradient(to right, ${stops.map((stop) => `${stop.color} ${stop.position}%`).join(', ')})`;
+    },
+    canvasSelectionBox() {
+      return this.boxSelection?.moved
+        ? boxSelectionRect(this.boxSelection.start, this.boxSelection.end)
+        : null;
+    },
+    movingCanvasItems() {
+      return this.movingItemPreviews.flatMap((preview) => {
+        const item = this.texture.items.find((item) => item.id === preview.id);
+        return item && item.visible !== false
+          ? [{ ...preview, x: Number(item.x), y: Number(item.y) }]
+          : [];
+      });
+    },
+    canvasSelectionMarkers() {
+      const query = this.search.toLowerCase();
+      const inset = 8 / this.finalZoom;
+      const radius = 4.5 / this.finalZoom;
+      const coordinate = (value, extent) =>
+        extent <= radius * 2
+          ? extent / 2
+          : Math.min(extent - radius, Math.max(radius, Number(value) + inset));
+      return this.texture.items
+        .filter(
+          (item) =>
+            item.visible !== false &&
+            this.isItemSelected(item) &&
+            (!query || item.name?.toLowerCase().includes(query)),
+        )
+        .map((item) => ({
+          id: item.id,
+          x: coordinate(item.x, Number(this.texture.width)),
+          y: coordinate(item.y, Number(this.texture.height)),
+          active: this.isItemActive(item),
+        }));
+    },
     canvasStyle() {
+      const grid = gridStyle(this.texture.grid);
       if (this.texture.center_locked) {
         return {
           width: `${this.canvasRenderedWidth}px`,
           height: `${this.canvasRenderedHeight}px`,
           flexShrink: 0,
           imageRendering: 'pixelated',
+          ...grid,
           '--checker-size': `${Math.max(1, Number(this.texture.step) || 1) * 20 * this.finalZoom}px`,
           position: 'absolute',
           margin: 0,
@@ -251,6 +325,7 @@ export default {
         width: `${this.canvasRenderedWidth}px`,
         height: `${this.canvasRenderedHeight}px`,
         imageRendering: 'pixelated',
+        ...grid,
         '--checker-size': `${Math.max(1, Number(this.texture.step) || 1) * 20 * this.finalZoom}px`,
         position: 'absolute',
         margin: 0,
@@ -440,6 +515,8 @@ export default {
     ...canvasInteractionMethods,
     ...canvasItemMethods,
     ...canvasRenderMethods,
+    ...itemMotionMethods,
+    ...boxSelectionMethods,
     ...colorMethods,
     ...fileMethods,
     ...historyMethods,
@@ -473,18 +550,20 @@ export default {
     this.ctx_clearcoat_roughness = this.$refs.clearcoat_roughness_texture.getContext('2d');
     this.ctx_mrc = this.$refs.mrc_texture.getContext('2d');
 
-    document.addEventListener('keyup', this.keyupHandler);
+    this.pushUndoSnapshot();
     document.addEventListener('keydown', this.keydownHandler);
     this.$nextTick(() => {
       this.draw();
     });
   },
   beforeUnmount() {
+    this.finishBoxSelection();
+    this.disposeItemMotion();
     this.stopZoomAnimation();
     this.disposeCanvasRendering();
     this.disposeMcpRequest?.();
     this.disposeMcpStatus?.();
-    document.removeEventListener('keyup', this.keyupHandler);
+
     document.removeEventListener('keydown', this.keydownHandler);
     window.removeEventListener('mousemove', this.onItemSearchResize);
     window.removeEventListener('mouseup', this.stopItemSearchResize);

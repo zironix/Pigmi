@@ -55,9 +55,13 @@ export const canvasRenderMethods = {
     this.ctx.clearRect(0, 0, width * zoom, height * zoom);
     for (const context of Object.values(contexts)) context.clearRect(0, 0, width, height);
 
+    const movingIds = new Set((this.movingItemPreviews || []).map((item) => item.id));
     const query = this.search.toLowerCase();
     const previewKey =
-      signature + query + (query ? JSON.stringify(items.map((item) => item.name)) : '');
+      signature +
+      query +
+      JSON.stringify([...movingIds]) +
+      (query ? JSON.stringify(items.map((item) => item.name)) : '');
     // Cache the scene without selection markers. Selection/zoom changes only
     // composite that bitmap and redraw markers, without rebuilding gradients.
     const reusePreview = state.preview && state.previewKey === previewKey;
@@ -69,7 +73,8 @@ export const canvasRenderMethods = {
       normalizeCanvasItem(item);
       if (!item.colors.length) continue;
       setMaterialStyles(contexts, item);
-      const showPreview = !query || item.name?.toLowerCase().includes(query);
+      const showPreview =
+        !movingIds.has(item.id) && (!query || item.name?.toLowerCase().includes(query));
 
       const drawRect = (rect) => {
         if (showPreview) {
@@ -98,8 +103,14 @@ export const canvasRenderMethods = {
       state.preview.getContext('2d').drawImage(this.canvas, 0, 0);
       state.previewKey = previewKey;
     }
-    // Selection is UI: draw it last so later cells/items cannot paint over it.
-    for (const item of items) {
+    this.drawSelectionMarkers();
+    state.signature = signature;
+  },
+  drawSelectionMarkers() {
+    // The live editor uses a vector overlay so markers survive low-resolution textures.
+    if (this.$refs?.selectionOverlay) return;
+    const query = this.search.toLowerCase();
+    for (const item of this.texture.items) {
       if (
         item.visible !== false &&
         (!query || item.name?.toLowerCase().includes(query)) &&
@@ -108,7 +119,6 @@ export const canvasRenderMethods = {
         this.drawSelectionCircle(item);
       }
     }
-    state.signature = signature;
   },
   drawCircle(ctx, x, y, radius, fill, stroke, strokeWidth) {
     ctx.beginPath();
@@ -137,12 +147,18 @@ export const canvasRenderMethods = {
   drawSelectionCircle(item) {
     if (!this.isItemSelected(item)) return;
     const isActive = this.isItemActive(item);
-    const fill = isActive ? '#e91e63' : '#858585';
+    const fill = isActive ? '#548af7' : '#858585';
     const stroke = isActive ? '#FFFFFF' : '#ffffff';
     this.drawCircle(
       this.ctx,
-      item.x + 8 / this.finalZoom,
-      item.y + 8 / this.finalZoom,
+      Math.min(
+        Number(this.texture.width) - 4 / this.finalZoom,
+        Math.max(4 / this.finalZoom, Number(item.x) + 8 / this.finalZoom),
+      ),
+      Math.min(
+        Number(this.texture.height) - 4 / this.finalZoom,
+        Math.max(4 / this.finalZoom, Number(item.y) + 8 / this.finalZoom),
+      ),
       4 / this.finalZoom,
       fill,
       stroke,

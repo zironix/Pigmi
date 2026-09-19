@@ -68,6 +68,25 @@ Node.js is needed for development and the MCP adapter, not for ordinary use of t
 See the [editor guide](docs/editor-guide.md) for shortcuts, color gestures, folder behavior,
 palette generation, and mix textures.
 
+## Canvas navigation and box selection
+
+The canvas fills the workspace behind the floating panels and has no scrollbars. Drag with the
+middle mouse button to pan, including from the empty workspace. The center button returns the
+canvas to the center of the window. Zoom stays centered while center lock is on and follows the
+cursor after panning.
+
+| Gesture                                          | Action                                                |
+| ------------------------------------------------ | ----------------------------------------------------- |
+| Shift + left-button drag                         | Replace selection with items touched by the box       |
+| Shift + Ctrl + left-button drag (⌘ on macOS)     | Add items to the selection                            |
+| Shift + Alt + left-button drag (Option on macOS) | Subtract items from the selection                     |
+| Esc during box selection                         | Cancel the gesture and restore the previous selection |
+| Ctrl / ⌘ + wheel                                 | Zoom                                                  |
+
+Start a selection box on the texture or the surrounding workspace. Hidden items are excluded.
+A plain left click on empty texture space still creates an item. Selected items move with a short
+visual animation between snapped positions; saved coordinates and exported maps remain exact.
+
 ## Material maps
 
 Exports are written beside the document using its name, for example:

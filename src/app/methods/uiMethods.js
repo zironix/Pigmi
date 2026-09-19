@@ -80,10 +80,14 @@ export const uiMethods = {
   onItemSearchResize(event) {
     if (!this.isItemSearchResizing || !this.$refs.leftSidebar) return;
     const rect = this.$refs.leftSidebar.getBoundingClientRect();
-    if (!rect.height) return;
+    const tabsHeight = this.$refs.leftSidebar.querySelector('.tabs')?.offsetHeight || 0;
+    const dividerHeight =
+      this.$refs.leftSidebar.querySelector('.item-search-resizer')?.offsetHeight || 0;
+    const availableHeight = rect.height - tabsHeight - dividerHeight;
+    if (availableHeight <= 0) return;
     const minRatio = 20;
     const maxRatio = 80;
-    const nextRatio = ((event.clientY - rect.top) / rect.height) * 100;
+    const nextRatio = ((event.clientY - rect.top - dividerHeight / 2) / availableHeight) * 100;
     this.itemSearchSplitRatio = Math.min(maxRatio, Math.max(minRatio, nextRatio));
   },
   stopItemSearchResize() {
@@ -99,9 +103,17 @@ export const uiMethods = {
   },
   onSidebarResize(event) {
     if (!this.isSidebarResizing) return;
-    const minWidth = 240;
+    const minWidth = 230;
     const maxWidth = Math.min(560, Math.max(280, window.innerWidth - 260));
-    this.sidebarWidth = Math.round(Math.min(maxWidth, Math.max(minWidth, event.clientX - 42)));
+    this.sidebarWidth = Math.round(
+      Math.min(
+        maxWidth,
+        Math.max(
+          minWidth,
+          event.clientX - (this.$refs.leftSidebar?.getBoundingClientRect().left || 0),
+        ),
+      ),
+    );
   },
   stopSidebarResize() {
     this.isSidebarResizing = false;

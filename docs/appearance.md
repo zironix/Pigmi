@@ -1,23 +1,26 @@
-# Dark Studio appearance
+# Pigmi 3.0 appearance and workspace
 
-The visual redesign is isolated on `codex/dark-studio-redesign`, based on `709e153` (2.1.10).
-It changes the presentation in `src/styles/studio.css` and a few labels/status elements in
-`src/App.vue`. The original styles remain in `src/styles/app.css`; document data, rendering,
-exports, MCP tools, and mouse/keyboard editing behavior are unchanged by the redesign.
+The redesign is isolated on `codex/dark-studio-redesign`, based on `709e153` (2.1.10).
+The previous interface remains available on `main` until the redesign is merged.
 
-The theme uses graphite surfaces, a restrained pink accent, rounded controls, system UI fonts,
-and monospace numeric values. Hover states and panel reveals use short transitions; the system's
-reduced-motion preference disables them. The darker transparency checker follows the same
-snapping step and zoom and does not affect exports.
+Pigmi 3.0 uses floating graphite panels over a full-window canvas, with shared colors, spacing,
+subtle glass effects, and keyboard focus states. The default accent is pink (`#ea1f62`).
+Appearance settings offer presets, a custom color, and white or dark button text. These choices
+are saved locally for all projects, outside texture files.
+
+The procedural grid follows snapping and zoom. Major horizontal and vertical lines default to
+every four cells; existing saved grid settings are preserved. Grid settings include a live preview.
+Texture settings and the workflow guide have their own page. See the [editor guide](editor-guide.md)
+for box selection, navigation, and editing shortcuts.
+
+Selection markers use a vector overlay, and movement animates only the preview. Exported maps
+retain exact document coordinates and do not include the grid or selection markers. The system's
+reduced-motion preference disables animations.
 
 ## Try or undo
 
-Run `npm start` on the redesign branch to try it in Electron. A packaged installation will keep
-its previous appearance until a new build is installed.
+Run `npm start` on the redesign branch to try it in Electron. A packaged installation keeps its
+previous appearance until a new build is installed.
 
-To return to the pre-redesign interface, switch back to `main` in your Git client (save or commit
-any later work before switching). The redesign branch stays available if you want to revisit it.
-If the redesign is later merged, revert its dedicated commit to remove just the redesign.
-
-For a quick code-level comparison, remove the `studio.css` style import at the bottom of
-`src/App.vue`. This restores the original styles while retaining the new status text and tooltips.
+To return to the pre-redesign version, switch to `main` in your Git client. Save or commit any
+later work before switching. Keep the redesign branch to revisit it later.

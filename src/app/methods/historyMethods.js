@@ -6,6 +6,12 @@ function isTextEditingTarget(target) {
   return tag === 'input' || tag === 'textarea' || target?.isContentEditable === true;
 }
 
+function historyKey(serialized) {
+  const texture = JSON.parse(serialized);
+  for (const item of texture.items || []) delete item.selected;
+  return JSON.stringify(texture);
+}
+
 export const historyMethods = {
   pushUndoSnapshot() {
     const s_tex = JSON.stringify(this.texture);
@@ -15,20 +21,25 @@ export const historyMethods = {
     if (!textureJson) return;
     if (
       this.undo_array.length === 0 ||
-      this.undo_array[this.undo_array.length - 1].texture !== textureJson
+      historyKey(this.undo_array[this.undo_array.length - 1].texture) !== historyKey(textureJson)
     ) {
       this.undo_array.push({ texture: textureJson, selected });
     }
-    if (this.undo_array.length >= this.texture.undo_count + 1 && this.undo_array.length !== 0) {
-      this.undo_array.shift();
-    }
+    const limit = Math.max(1, Number(this.texture.undo_count) || 20) + 1;
+    while (this.undo_array.length > limit) this.undo_array.shift();
   },
   addUndo(event) {
     const target = event && typeof event === 'object' ? event.target : null;
     const tag = target && target.tagName ? target.tagName.toLowerCase() : '';
-    if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) {
+    if (
+      event?.type === 'keyup' &&
+      (event.ctrlKey ||
+        event.metaKey ||
+        tag === 'input' ||
+        tag === 'textarea' ||
+        target?.isContentEditable)
+    )
       return;
-    }
     if (event === 'click' && !this.current_color_offset_first_change) {
       this.current_color_offset = -1;
       this.current_color_offset_first_change = false;
@@ -44,6 +55,7 @@ export const historyMethods = {
     });
   },
   undo() {
+    this.pushUndoSnapshot();
     if (this.undo_array.length > 1) {
       const collapsedMap = new Map();
       const collectCollapsedState = (nodes) => {
@@ -77,10 +89,18 @@ export const historyMethods = {
       this.undo_array.pop();
       this.texture = JSON.parse(this.undo_array[this.undo_array.length - 1].texture);
       applyCollapsedState(this.texture?.layers);
-      this.selected = this.undo_array[this.undo_array.length - 1].selected;
+      const previousSelection = this.undo_array[this.undo_array.length - 1].selected;
+      this.selected =
+        Number.isInteger(previousSelection) && this.texture.items[previousSelection]
+          ? previousSelection
+          : false;
+      if (this.ls) {
+        const ids = this.texture.items.filter((item) => item.selected).map((item) => item.id);
+        applyLayerSelection(this.ls, ids, 'item');
+      }
       if (this.selected === false) {
         if (this.current_tab !== 'search') {
-          this.current_tab = 'texture';
+          this.current_tab = 'search';
         }
       }
       this.draw();
@@ -103,19 +123,22 @@ export const historyMethods = {
   maximize() {
     window.electronAPI.maximizeWindow();
   },
-  keyupHandler(event) {
-    if (isTextEditingTarget(event.target)) return;
-
-    const isPrimaryModifier = isPlatformPrimaryModifier({
-      platform: window.electronAPI?.platform,
-      ctrlKey: event.ctrlKey,
-      metaKey: event.metaKey,
-    });
-    if (isPrimaryModifier && event.code === 'KeyZ') {
-      this.undo();
-    }
-  },
   keydownHandler(event) {
+    if (event.code === 'Escape' && this.boxSelection) {
+      event.preventDefault();
+      this.cancelBoxSelection();
+      return;
+    }
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      event.code === 'KeyZ' &&
+      !event.shiftKey &&
+      !isTextEditingTarget(event.target)
+    ) {
+      event.preventDefault();
+      this.undo();
+      return;
+    }
     if (event.code === 'Escape') {
       if (this.ls) {
         applyLayerSelection(this.ls, []);

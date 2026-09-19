@@ -18,6 +18,25 @@ settings, and MCP connection information. The right sidebar contains the color s
 active item. Both sidebars can be locked, and the left sidebar can be resized. Item settings and
 the layer tree can also be shown as a resizable split view.
 
+## Canvas navigation and box selection
+
+The canvas fills the workspace behind the floating panels and has no scrollbars. Drag with the
+middle mouse button to pan, including from the empty workspace. The center button returns the
+canvas to the center of the window. Zoom stays centered while center lock is on and follows the
+cursor after panning.
+
+| Gesture                                          | Action                                                |
+| ------------------------------------------------ | ----------------------------------------------------- |
+| Shift + left-button drag                         | Replace selection with items touched by the box       |
+| Shift + Ctrl + left-button drag (⌘ on macOS)     | Add items to the selection                            |
+| Shift + Alt + left-button drag (Option on macOS) | Subtract items from the selection                     |
+| Esc during box selection                         | Cancel the gesture and restore the previous selection |
+| Ctrl / ⌘ + wheel                                 | Zoom                                                  |
+
+Start a selection box on the texture or the surrounding workspace. Hidden items are excluded.
+A plain left click on empty texture space still creates an item. Selected items move with a short
+visual animation between snapped positions; saved coordinates and exported maps remain exact.
+
 ## Items and gradients
 
 Pigmi has two item types:

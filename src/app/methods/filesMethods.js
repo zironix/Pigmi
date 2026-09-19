@@ -21,6 +21,7 @@ function captureExportSnapshot(editor, canPreview, exportMaps = true) {
     serializedTexture: JSON.stringify(editor.texture),
     finalZoom: 1,
     ctx: editor.ctx,
+    drawSelectionMarkers: () => editor.drawSelectionMarkers?.(),
     canPreview,
   };
   if (!exportMaps) return snapshot;
@@ -210,6 +211,8 @@ export const fileMethods = {
           this.texture.width * this.finalZoom,
           this.texture.height * this.finalZoom,
         );
+        // Async mix previews must not cover the live selection overlay.
+        this.drawSelectionMarkers?.();
       }
     }
     await writeCanvas();
@@ -264,6 +267,7 @@ export const fileMethods = {
 
           if (data.length > 0) {
             this.texture = this.fixTexture(JSON.parse(data));
+            this.undo_array = [];
             if (this.texture.items.length) {
               this.lastItem = JSON.parse(JSON.stringify(this.texture.items[0]));
             }

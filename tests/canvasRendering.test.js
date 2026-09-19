@@ -8,6 +8,12 @@ import { computeItemBounds } from '../src/ai/aiPlanShared';
 import { makeItem, renderContext } from './helpers/canvas';
 
 describe('canvas rendering', () => {
+  it('keeps live selection out of the low-resolution bitmap when the vector overlay exists', () => {
+    const context = renderContext([makeItem()], { $refs: { selectionOverlay: {} } });
+    context.draw();
+    expect(context.drawSelectionCircle).not.toHaveBeenCalled();
+  });
+
   it('uses the actual painted extent for hit testing and MCP placement', () => {
     for (const colorCount of [1, 2, 3, 4]) {
       for (const steps of [1, 2, 3]) {
