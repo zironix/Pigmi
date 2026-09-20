@@ -261,9 +261,7 @@ function updateZone(event: DragEvent, is_self) {
     ls.zone = isExpandedFolder ? 'center' : 'bottom';
   } else {
     if (!is_self) {
-      if (props.item && props.item.type === 'folder') {
-        ls.zone = 'center';
-      }
+      ls.zone = props.item.type === 'folder' ? 'center' : ratio < 0.5 ? 'top' : 'bottom';
     }
   }
 }

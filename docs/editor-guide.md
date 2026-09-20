@@ -5,18 +5,18 @@
 ## Editor workflow
 
 1. Open the texture settings tab and choose a project folder.
-2. For a new document, enter a texture name, click **Create**, then **Overwrite and sync**
-   and confirm. For an existing document, select it and click **Load and sync**.
+2. Select an existing document and click **Load and sync**, or enter a new name and click
+   **Create texture** to save the current canvas as a new document. Both enable automatic saving.
 3. Left-click an empty point on the canvas to create the first item.
 4. Configure the item type, size, gradient, colors, and material properties.
 5. Duplicate, arrange, group, and edit items through the canvas and layer tree.
 6. Enable the maps and formats you need. While synchronization is active, Pigmi automatically
    updates the JSON document and enabled exports after changes.
 
-The left sidebar contains item settings, layers, texture/export settings, palette-generation
-settings, and MCP connection information. The right sidebar contains the color stops for the
-active item. Both sidebars can be locked, and the left sidebar can be resized. Item settings and
-the layer tree can also be shown as a resizable split view.
+The bottom-left tab bar opens item settings, layers, palette generation, texture settings, and MCP
+connection information. Texture settings and MCP have dedicated pages. The right sidebar contains
+the active item’s color stops. Both sidebars can be locked, and the left sidebar can be resized.
+Item settings and the layer tree can also be shown as a resizable split view.
 
 ## Canvas navigation and box selection
 
@@ -91,7 +91,7 @@ In this section, **Primary** means `⌘ Command` on macOS and `Ctrl` on Windows/
 | Drag the bars beside a color                   | Change the stop order                                              |
 | Click a color lock                             | Preserve that color during Huemint generation                      |
 
-For smooth RGB gradients, the horizontal stop editor above the canvas controls each stop's exact
+For smooth RGB gradients, the horizontal stop editor at the bottom of the canvas controls each stop's exact
 position from 0 to 100 percent.
 
 ## Layers
@@ -174,7 +174,8 @@ map visible. **Mix preview** controls whether the composite also appears on the 
 A Pigmi project is a user-selected folder containing one or more JSON documents and their exported
 maps. Pigmi never needs a proprietary project database.
 
-- **Create** adds a new empty JSON document.
+- **Create texture** saves the current canvas to a new JSON document and enables automatic saving.
+  Existing filenames are rejected; use another name or explicitly choose **Overwrite and sync**.
 - **Load and sync** opens an existing document and enables automatic saving.
 - **Overwrite and sync** writes the current editor state into the selected document.
 - **Desynchronize** keeps the current document open but stops automatic writes.
@@ -182,8 +183,10 @@ maps. Pigmi never needs a proprietary project database.
   minimum delay.
 
 Texture settings include canvas width and height, maximum item size, snapping step, undo history
-length, zoom, zoom speed, default color representation, output formats, mix preview, and panel
-locks.
+length, zoom, zoom speed, default color representation, output formats, and mix preview. Grid
+settings control line spacing, colors, and intersection dots, with a live preview. Appearance
+settings control the accent color and button text; these are saved globally, outside texture files.
+Use the bottom-corner locks to keep the sidebars open.
 
 ## Palette generation
 
@@ -246,5 +249,5 @@ focused.
 | Command-click              | Extend or reduce the selection without triggering the macOS Control-click menu |
 
 While center locking is enabled, zoom keeps the canvas centered. Panning releases center locking
-while preserving the current position; subsequent zoom follows the pointer. The center control in the right-side tab rail restores automatic
-centering.
+while preserving the current position; subsequent zoom follows the pointer. The center control at the bottom of the window restores automatic centering and hides
+while the canvas is centered.

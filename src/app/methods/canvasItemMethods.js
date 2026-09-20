@@ -51,9 +51,9 @@ export const canvasItemMethods = {
         this.texture.items[idx].selected = true;
         this.is_syncing_layers = true;
         this.selected = idx;
+        this.showItemPanelAfterSelection();
       }
     });
-    this.showItemPanelAfterSelection();
     return this.texture.items.length - 1;
   },
   remove(index) {

@@ -9,6 +9,13 @@ function isTextEditingTarget(target) {
 function historyKey(serialized) {
   const texture = JSON.parse(serialized);
   for (const item of texture.items || []) delete item.selected;
+  const ignoreFolderExpansion = (nodes) => {
+    for (const node of nodes || []) {
+      delete node.collapsed;
+      ignoreFolderExpansion(node.childs);
+    }
+  };
+  ignoreFolderExpansion(texture.layers);
   return JSON.stringify(texture);
 }
 

@@ -24,7 +24,7 @@
       <div class="logo-text">
         <div>PIGMI</div>
         <div class="version">
-          <span>v{{ appVersion || '…' }}</span>
+          <span>v{{ buildVersion }}</span>
           <button
             v-if="updateAvailable && updateCheckEnabled"
             class="update-available"
@@ -292,7 +292,7 @@
       >
         <div class="settings-scroll" v-scroll-fade>
           <section class="settings-category">
-            <h3>Geometry</h3>
+            <h3 class="panel-heading">Geometry</h3>
             <div class="custom-input">
               <div class="name">Name</div>
               <input type="text" v-model="texture.items[selected].name" placeholder="Item name" />
@@ -374,7 +374,7 @@
             </div>
           </section>
           <section class="settings-category">
-            <h3>Material</h3>
+            <h3 class="panel-heading">Material</h3>
             <div class="custom-input">
               <div class="name">Color mode</div>
 
@@ -508,6 +508,7 @@
         v-if="current_tab === 'generation' && !isItemSearchSplitVisible"
         :class="{ locked: texture.locked_left }"
       >
+        <h3 class="panel-heading">Palette generation</h3>
         <div class="custom-input">
           <div class="name">Mode</div>
           <VueSelect
@@ -638,7 +639,7 @@
                 <button
                   class="new-file project-create"
                   type="button"
-                  :disabled="!texture_name.trim()"
+                  :disabled="projectCreating || !texture_name.trim()"
                   @click="newTexture()"
                 >
                   Create texture
@@ -646,6 +647,7 @@
               </div>
             </section>
           </div>
+          <p v-if="projectError" class="project-error" role="alert">{{ projectError }}</p>
           <p class="project-note">
             Load and sync opens the selected file and saves subsequent edits automatically.
             Overwrite and sync replaces that file with the current document.

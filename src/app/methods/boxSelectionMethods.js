@@ -20,6 +20,7 @@ export const boxSelectionMethods = {
         end: start,
         initialIds: [...this.ls.selected],
         initialActive: this.ls.active_id,
+        initialActiveType: this.ls.active_type,
         mode: event.altKey ? 'subtract' : this.isToggleSelectionPressed(event) ? 'add' : 'replace',
         moved: false,
       };
@@ -61,6 +62,7 @@ export const boxSelectionMethods = {
     if (box) {
       applyLayerSelection(this.ls, box.initialIds, 'item');
       this.ls.active_id = box.initialActive;
+      this.ls.active_type = box.initialActiveType;
     }
     this.finishBoxSelection();
   },

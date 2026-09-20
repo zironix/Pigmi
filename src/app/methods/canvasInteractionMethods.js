@@ -2,6 +2,7 @@ import { applyLayerSelection } from '../../stores/layers';
 import {
   findTopmostCanvasItemIndex,
   getCanvasItemCellOffset,
+  getCanvasItemBounds,
   isPointInsideCanvasItem,
 } from '../../utils/canvasItemGeometry';
 import { isPlatformPrimaryModifier } from '../../utils/inputModifiers';
@@ -17,6 +18,17 @@ const PRIMARY_MOUSE_BUTTON = 0;
 const MIDDLE_MOUSE_BUTTON = 1;
 const SECONDARY_MOUSE_BUTTON = 2;
 const zoomAnimations = new WeakMap();
+
+// Prefer snapped positions inside the texture. Oversized selections may pan
+// between their two edges, keeping their relative layout intact.
+function clampSnapped(value, min, max, step) {
+  const low = Math.min(min, max);
+  const high = Math.max(min, max);
+  const snappedLow = Math.ceil(low / step) * step;
+  const snappedHigh = Math.floor(high / step) * step;
+  if (snappedLow > snappedHigh) return Math.max(low, Math.min(high, value));
+  return Math.max(snappedLow, Math.min(snappedHigh, Math.round(value / step) * step));
+}
 
 export const canvasInteractionMethods = {
   isToggleSelectionPressed(event) {
@@ -75,7 +87,9 @@ export const canvasInteractionMethods = {
         }
       });
       this.drag_start_positions = positions;
-      this.beginItemMotion?.();
+      if (!isToggleSelection) this.beginItemMotion?.();
+      window.addEventListener('mouseup', this.onCanvasDragEnd);
+      window.addEventListener('blur', this.onCanvasDragEnd);
     }
     if (event.button === SECONDARY_MOUSE_BUTTON) {
       const idx = this.select(event, false);
@@ -183,6 +197,24 @@ export const canvasInteractionMethods = {
         }
       }
     }
+    this.resetCanvasDrag();
+  },
+  onCanvasDragEnd(event) {
+    if (event.type === 'mouseup' && event.button !== PRIMARY_MOUSE_BUTTON) return;
+    // Outside the texture there is no hit to select, but the drag must still finish.
+    const wasPressed = this.is_pressed;
+    this.resetCanvasDrag();
+    if (wasPressed) {
+      this.finishItemMotion?.();
+      this.addUndo?.();
+    }
+  },
+  disposeCanvasInteraction() {
+    window.removeEventListener('mouseup', this.onCanvasDragEnd);
+    window.removeEventListener('blur', this.onCanvasDragEnd);
+  },
+  resetCanvasDrag() {
+    this.disposeCanvasInteraction();
     this.is_pressed = false;
     if (this.is_moving) {
       this.is_moving = false;
@@ -278,16 +310,23 @@ export const canvasInteractionMethods = {
         if (this.drag_moved) {
           this.is_moving = true;
           const step = Number(this.texture.step) || 1;
-          this.texture.items.forEach((it) => {
-            if (!selectedSet.has(it.id)) return;
-            const start = this.drag_start_positions[it.id];
-            if (!start) return;
-            let nx = start.x + dx;
-            let ny = start.y + dy;
-            nx = Math.round(nx / step) * step;
-            ny = Math.round(ny / step) * step;
-            it.x = nx;
-            it.y = ny;
+          const moving = this.texture.items.filter(
+            (item) => selectedSet.has(item.id) && this.drag_start_positions[item.id],
+          );
+          const bounds = moving.map((item) => ({
+            ...getCanvasItemBounds(item),
+            ...this.drag_start_positions[item.id],
+          }));
+          const left = Math.min(...bounds.map((b) => b.x));
+          const top = Math.min(...bounds.map((b) => b.y));
+          const right = Math.max(...bounds.map((b) => b.x + b.width));
+          const bottom = Math.max(...bounds.map((b) => b.y + b.height));
+          const moveX = clampSnapped(dx, -left, this.texture.width - right, step);
+          const moveY = clampSnapped(dy, -top, this.texture.height - bottom, step);
+          moving.forEach((item) => {
+            const start = this.drag_start_positions[item.id];
+            item.x = start.x + moveX;
+            item.y = start.y + moveY;
           });
           this.draw();
         }
@@ -300,11 +339,16 @@ export const canvasInteractionMethods = {
       this.is_moving = true;
       const [width, height] = Array.isArray(item.size) ? item.size : [item.size, item.size];
       const step = Number(this.texture.step) || 1;
-      const x =
+      let x =
         Math.floor((event.offsetX / this.finalZoom - this.selected_offset.x * width) / step) * step;
-      const y =
+      let y =
         Math.floor((event.offsetY / this.finalZoom - this.selected_offset.y * height) / step) *
         step;
+      const bounds = getCanvasItemBounds(item);
+      if (bounds) {
+        x = clampSnapped(x, 0, this.texture.width - bounds.width, step);
+        y = clampSnapped(y, 0, this.texture.height - bounds.height, step);
+      }
       if (item.x !== x || item.y !== y) {
         item.x = x;
         item.y = y;

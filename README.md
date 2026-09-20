@@ -53,8 +53,8 @@ Node.js is needed for development and the MCP adapter, not for ordinary use of t
 ## Quick start
 
 1. Open texture settings and choose a project folder.
-2. Enter a texture name and click **Create**, then **Overwrite and sync** and confirm to save the
-   current canvas there. To open an existing JSON document, select it and click **Load and sync**.
+2. To open an existing JSON document, select it and click **Load and sync**. To save the current
+   canvas as a new document, enter a name and click **Create texture**. Both enable automatic saving.
 3. Click empty canvas space to create an item. Edit its gradient, colors, size, and material values
    in the sidebars.
 4. Arrange items on the canvas or in the layer tree. Use **Search** in the title bar to find items
@@ -62,8 +62,9 @@ Node.js is needed for development and the MCP adapter, not for ordinary use of t
 5. Choose the maps and PNG/WebP formats you need in texture settings. While synchronized, changes
    update the document and enabled exports automatically.
 
-**Create** makes an empty JSON file; synchronization is what saves the editor content into it.
-**Desynchronize** stops automatic writes without clearing the canvas.
+**Create texture** saves the current canvas under a new name; existing files are never replaced by
+this action. Use **Overwrite and sync** and confirm only when you want to replace a selected
+document with the current canvas. **Desynchronize** stops automatic writes without clearing it.
 
 See the [editor guide](docs/editor-guide.md) for shortcuts, color gestures, folder behavior,
 palette generation, and mix textures.
@@ -146,7 +147,7 @@ claim that every later Blender release has been tested.
 Pigmi includes a local STDIO MCP adapter. The AI model and account come from your chosen client.
 
 1. Keep Pigmi running with a document open.
-2. Open the **MCP / Connect AI client** page using the plug icon in the left sidebar.
+2. Open the **MCP / Connect AI client** page using the plug icon in the bottom-left tab bar.
 3. Copy the generated configuration for your client. It contains the correct server and connection
    paths for this installation.
 4. Reload the client's MCP configuration and ask it to inspect the open Pigmi document.

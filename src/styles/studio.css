@@ -128,8 +128,12 @@ body {
   right: 248px;
 }
 #app-window #texture {
+  background-origin: content-box;
+  background-clip: padding-box;
   border-color: #ffffff16;
-  box-shadow: 0 14px 44px #00000055;
+  box-shadow:
+    inset 0 0 0 var(--grid-line, 1px) var(--grid-major-color, #36393d),
+    0 14px 44px #00000055;
 }
 #app-window .sidebar,
 #app-window .sidebar2 {
@@ -248,7 +252,7 @@ body {
 #app-window .custom-input input:focus,
 #app-window .custom-input textarea:focus {
   border-color: var(--studio-accent);
-  box-shadow: 0 0 0 2px var(--studio-accent-wash);
+  box-shadow: none;
 }
 #app-window .custom-input .row {
   gap: 5px;
@@ -338,6 +342,31 @@ body {
 #app-window .layer-item.is-selected > .main-info {
   background: var(--studio-selection);
   color: var(--studio-text);
+}
+/* Draw insertion markers above row backgrounds, without changing row height. */
+#app-window .layer-item:is(.zone-top, .zone-bottom)::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--studio-accent);
+  z-index: 2;
+  pointer-events: none;
+}
+#app-window .layer-item.zone-top::after {
+  top: 0;
+}
+#app-window .layer-item.zone-bottom::after {
+  bottom: 0;
+}
+#app-window .layer-item.zone-center {
+  background: transparent;
+}
+#app-window .layer-item.zone-center > .main-info {
+  background: var(--studio-accent-wash);
+  box-shadow: inset 0 0 0 1px var(--studio-accent);
 }
 #app-window .layer-item .main-info .preview {
   border-radius: 0;
@@ -679,10 +708,25 @@ body {
   border-color: var(--studio-line);
   color: var(--studio-text);
 }
+/* Keep field focus inside its bounds; buttons retain their keyboard focus ring. */
 #app-window :is(input, textarea, select):focus-visible {
-  outline-width: 1px !important;
-  outline-offset: 0;
+  outline: 1px solid var(--studio-accent) !important;
+  outline-offset: -1px !important;
   box-shadow: none;
+}
+#app-window [data-assembled-select]:focus-within {
+  --vs-border: 1px solid var(--studio-accent);
+}
+#app-window [data-select-input]:focus-visible {
+  outline: none !important;
+}
+#app-window .custom-input :is(input, textarea, select, .row) {
+  min-width: 0;
+  max-width: 100%;
+}
+#app-window .custom-input .row > input {
+  flex: 1 1 0;
+  width: 0;
 }
 
 /* Custom slider dots must fill the slider's positioning box, including their border. */
@@ -1179,8 +1223,8 @@ body {
 #app-window .color-offset-slider {
   left: 24px;
   right: 24px;
-  bottom: 47px;
-  height: 40px;
+  bottom: 54px;
+  height: 36px;
 }
 #app-window:has(.sidebar.left-locked) .color-offset-slider {
   left: calc(var(--studio-sidebar-width, 220px) + 24px);
@@ -1189,8 +1233,11 @@ body {
   right: 254px;
 }
 #app-window .color-offset-slider-container {
-  padding: 10px 18px;
-  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 18px;
+  border-radius: 18px;
   min-width: 0;
   background: var(--glass-surface);
   border: 0;
@@ -1224,9 +1271,10 @@ body {
   color: var(--studio-text);
 }
 #app-window .texture-page {
-  max-width: 1320px;
-  margin: auto;
-  padding: 34px clamp(20px, 4vw, 64px) 48px;
+  box-sizing: border-box;
+  width: min(1420px, 100%);
+  margin: 0 auto;
+  padding: 34px clamp(22px, 4vw, 64px) 50px;
 }
 #app-window .texture-page-header {
   margin-bottom: 28px;
@@ -1238,10 +1286,10 @@ body {
   font-weight: 600;
 }
 #app-window .texture-page h1 {
-  font-size: clamp(26px, 3vw, 38px);
+  font-size: clamp(24px, 3vw, 38px);
   font-weight: 500;
-  letter-spacing: -1px;
-  margin: 8px 0 12px;
+  letter-spacing: -0.8px;
+  margin: 5px 0 10px;
 }
 #app-window .texture-page h2 {
   font-size: 22px;
@@ -1255,7 +1303,8 @@ body {
   line-height: 1.75;
 }
 #app-window .texture-page-header p {
-  max-width: 760px;
+  max-width: 820px;
+  margin: 0;
 }
 #app-window .texture-page nav {
   display: flex;
@@ -1493,7 +1542,7 @@ body {
     var(--glass-edge),
     0 3px 10px #00000020;
 }
-#app-window :is(button, a, summary, input, select, textarea):focus-visible {
+#app-window :is(button, a, summary):focus-visible {
   outline: 2px solid var(--studio-accent) !important;
   outline-offset: 2px;
 }
@@ -1749,4 +1798,111 @@ body {
   color: var(--studio-muted);
   font-size: 11px;
   line-height: 1.5;
+}
+
+/* Shared sidebar typography and insets. The header accounts for scroll gutters. */
+#app-window .sidebar {
+  --panel-inset: 4px;
+  --panel-content-inset: 8px;
+  --panel-heading-space: 12px;
+}
+#app-window .sidebar .panel-heading {
+  box-sizing: border-box;
+  margin: 0;
+  padding: var(--panel-heading-space) var(--panel-content-inset);
+  font: 600 12px/18px var(--studio-font);
+  letter-spacing: 0.02em;
+  color: var(--studio-text);
+  background: transparent;
+  border: 0;
+}
+#app-window .sidebar .layers-panel-heading {
+  padding-inline: calc(var(--panel-content-inset) + var(--studio-scrollbar));
+}
+#app-window .sidebar .settings-category {
+  padding: 0 0 8px;
+}
+#app-window .sidebar .settings-category + .settings-category {
+  margin-top: 8px;
+  padding-top: 0;
+}
+#app-window .sidebar :is(.settings-category, .generation-settings) .custom-input {
+  padding: 6px var(--panel-content-inset);
+}
+#app-window .sidebar .generation-settings {
+  box-sizing: border-box;
+  scrollbar-gutter: stable both-edges;
+}
+#app-window .sidebar :is(.item-settings, .generation-settings),
+#app-window .sidebar .layers-panel {
+  padding: var(--panel-inset);
+}
+#app-window .sidebar .generation-settings > .version {
+  padding: 12px var(--panel-content-inset) !important;
+  color: var(--studio-muted) !important;
+  font: 11px/16px var(--studio-font);
+}
+
+#app-window .layers-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 24px 12px;
+  gap: 10px;
+  text-align: center;
+  color: var(--studio-muted);
+  font: 12px/1.6 var(--studio-font);
+}
+#app-window .layers-empty > i {
+  font-size: 28px;
+  color: var(--studio-accent);
+}
+#app-window .layers-empty strong {
+  color: var(--studio-text);
+  font-weight: 600;
+}
+#app-window .layers-empty p {
+  margin: 0;
+}
+#app-window .layers-empty > span {
+  font-size: 11px;
+}
+
+#app-window .texture-page .project-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--studio-danger);
+  border-radius: 8px;
+  color: var(--studio-danger-text);
+  background: var(--studio-danger-surface);
+}
+
+/* Settings use the same page and card surfaces as the MCP guide. */
+#app-window :is(.texture-workspace, .mcp-workspace) {
+  border-radius: 12px;
+  color: var(--studio-text);
+}
+#app-window .texture-page :is(.settings-category, .guide-card) {
+  padding: 22px;
+  border: 1px solid var(--studio-line);
+  border-radius: 14px;
+  background: var(--studio-panel);
+  box-shadow: none;
+}
+#app-window .texture-page .project-start {
+  padding: 22px;
+  border-radius: 14px;
+  background: var(--studio-panel);
+}
+#app-window .texture-page :is(h2, .settings-category h3, .guide-card h3) {
+  font-size: 16px;
+  font-weight: 500;
+}
+#app-window .texture-page .page-eyebrow {
+  color: var(--studio-accent);
+  letter-spacing: 1.5px;
+  font-weight: 400;
 }

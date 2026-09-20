@@ -1,7 +1,7 @@
 # Pigmi 3.0 appearance and workspace
 
-The redesign is isolated on `codex/dark-studio-redesign`, based on `709e153` (2.1.10).
-The previous interface remains available on `main` until the redesign is merged.
+The redesign was developed on `codex/dark-studio-redesign`, based on `709e153` (2.1.10).
+The previous interface remains available at the `v2.1.10` tag.
 
 Pigmi 3.0 uses floating graphite panels over a full-window canvas, with shared colors, spacing,
 subtle glass effects, and keyboard focus states. The default accent is pink (`#ea1f62`).
@@ -19,8 +19,8 @@ reduced-motion preference disables animations.
 
 ## Try or undo
 
-Run `npm start` on the redesign branch to try it in Electron. A packaged installation keeps its
+Run `npm start` from the 3.0 source to try it in Electron. A packaged installation keeps its
 previous appearance until a new build is installed.
 
-To return to the pre-redesign version, switch to `main` in your Git client. Save or commit any
-later work before switching. Keep the redesign branch to revisit it later.
+To inspect the pre-redesign source, check out the `v2.1.10` tag in your Git client. Save or commit
+any later work before switching. Return to your 3.0 branch to resume development.

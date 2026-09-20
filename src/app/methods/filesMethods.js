@@ -247,11 +247,48 @@ export const fileMethods = {
     }, updateInterval);
   },
   async newTexture() {
-    this.selected_file = this.texture_name + '.json';
-    this.texture_name = '';
-    const path = this.folder_path + this.slash + this.selected_file;
-    await window.electronAPI.writeTextFile(path, '');
-    this.getFiles();
+    if (this.projectCreating) return false;
+    this.projectError = '';
+    const name = this.texture_name.trim();
+    if (
+      !this.folder_path ||
+      !name ||
+      /[<>:"/\\|?*]/u.test(name) ||
+      [...name].some((char) => char.charCodeAt(0) < 32)
+    ) {
+      this.projectError = 'Choose a project folder and enter a valid file name.';
+      return false;
+    }
+    const folder = this.folder_path;
+    const texture = this.texture;
+    const file = /\.json$/i.test(name) ? name : `${name}.json`;
+    const path = folder + this.slash + file;
+    this.projectCreating = true;
+    try {
+      if (await window.electronAPI.fileExists(path)) {
+        this.projectError =
+          'A texture with this name already exists. Load it or choose another name.';
+        return false;
+      }
+      // Exclusive creation also protects against a file appearing after the check.
+      await window.electronAPI.writeTextFile(path, JSON.stringify(texture), { exclusive: true });
+      if (this.folder_path !== folder || this.texture !== texture) return true;
+      this.selected_file = file;
+      this.texture_name = '';
+      await this.getFiles();
+      await this.$nextTick();
+      if (this.folder_path === folder && this.texture === texture && this.selected_file === file) {
+        // The file/name watchers disable sync; enable it after those watchers run.
+        this.sync = true;
+        this.save();
+      }
+      return true;
+    } catch (error) {
+      this.projectError = `Could not create texture: ${error.message || String(error)}`;
+      return false;
+    } finally {
+      this.projectCreating = false;
+    }
   },
   async loadAndSync({ throwOnError = false } = {}) {
     this.overwrite_confirmation = 0;

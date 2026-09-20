@@ -120,10 +120,13 @@ export function registerFileHandlers(ipcMain) {
     return new Uint8Array(await fs.readFile(targetPath));
   });
 
-  ipcMain.handle(IPC_CHANNELS.writeTextFile, async (_event, filePath, contents) => {
+  ipcMain.handle(IPC_CHANNELS.writeTextFile, async (_event, filePath, contents, options) => {
     const targetPath = await assertAuthorizedProjectPath(assertPath(filePath, 'filePath'));
     await ensureParentDirectory(targetPath);
-    await fs.writeFile(targetPath, String(contents), 'utf8');
+    await fs.writeFile(targetPath, String(contents), {
+      encoding: 'utf8',
+      flag: options?.exclusive === true ? 'wx' : 'w',
+    });
     return true;
   });
 

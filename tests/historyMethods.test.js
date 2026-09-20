@@ -57,4 +57,20 @@ describe('document undo', () => {
     expect(state.undo).toHaveBeenCalledOnce();
     expect(preventDefault).toHaveBeenCalledOnce();
   });
+  it('keeps undo progressing after a folder is expanded or collapsed', () => {
+    const state = editor();
+    state.texture.layers = [{ id: 10, type: 'folder', collapsed: false, childs: [] }];
+    state.pushUndoSnapshot();
+    state.texture.items[0].x = 10;
+    state.pushUndoSnapshot();
+    state.texture.items[0].x = 20;
+    state.pushUndoSnapshot();
+    state.texture.layers[0].collapsed = true;
+    state.undo();
+    expect(state.texture.items[0].x).toBe(10);
+    expect(state.texture.layers[0].collapsed).toBe(true);
+    state.undo();
+    expect(state.texture.items[0].x).toBe(0);
+    expect(state.texture.layers[0].collapsed).toBe(true);
+  });
 });

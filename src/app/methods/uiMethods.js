@@ -63,7 +63,8 @@ export const uiMethods = {
         return;
       }
       this.current_tab = 'search';
-      this.lastItemSearchState = 'search';
+      // Viewing an empty Layers panel does not close the default Geometry panel.
+      if (this.selected !== false) this.lastItemSearchState = 'search';
       return;
     }
 

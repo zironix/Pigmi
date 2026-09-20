@@ -22,6 +22,86 @@ afterEach(() => {
 });
 
 describe('file loading', () => {
+  it('creates a complete project before enabling synchronization', async () => {
+    const writeTextFile = vi.fn().mockResolvedValue(true);
+    globalThis.window = {
+      electronAPI: { fileExists: vi.fn().mockResolvedValue(false), writeTextFile },
+    };
+    const context = {
+      folder_path: '/project',
+      slash: '/',
+      texture_name: ' New palette.json ',
+      selected_file: 'old.json',
+      texture: { width: 512, height: 256, items: [{ id: 1, name: 'Body' }] },
+      sync: false,
+      getFiles: vi.fn().mockResolvedValue(undefined),
+      $nextTick: vi.fn().mockResolvedValue(undefined),
+      save: vi.fn(),
+    };
+
+    expect(await fileMethods.newTexture.call(context)).toBe(true);
+
+    expect(writeTextFile).toHaveBeenCalledWith(
+      '/project/New palette.json',
+      JSON.stringify(context.texture),
+      { exclusive: true },
+    );
+    expect(context.selected_file).toBe('New palette.json');
+    expect(context.texture_name).toBe('');
+    expect(context.sync).toBe(true);
+    expect(context.save).toHaveBeenCalledOnce();
+    expect(context.$nextTick.mock.invocationCallOrder[0]).toBeLessThan(
+      context.save.mock.invocationCallOrder[0],
+    );
+    expect(context.projectCreating).toBe(false);
+  });
+
+  it('does not truncate an existing project or switch to it when creating a duplicate name', async () => {
+    const writeTextFile = vi.fn();
+    globalThis.window = {
+      electronAPI: { fileExists: vi.fn().mockResolvedValue(true), writeTextFile },
+    };
+    const context = {
+      folder_path: '/project',
+      slash: '/',
+      texture_name: 'existing',
+      selected_file: 'current.json',
+      texture: { items: [] },
+      sync: false,
+    };
+
+    expect(await fileMethods.newTexture.call(context)).toBe(false);
+
+    expect(writeTextFile).not.toHaveBeenCalled();
+    expect(context.selected_file).toBe('current.json');
+    expect(context.texture_name).toBe('existing');
+    expect(context.sync).toBe(false);
+    expect(context.projectError).toContain('already exists');
+    expect(context.projectCreating).toBe(false);
+  });
+
+  it('reports a failed create without switching the active project', async () => {
+    globalThis.window = {
+      electronAPI: {
+        fileExists: vi.fn().mockResolvedValue(false),
+        writeTextFile: vi.fn().mockRejectedValue(new Error('EEXIST')),
+      },
+    };
+    const context = {
+      folder_path: '/project',
+      slash: '/',
+      texture_name: 'new',
+      selected_file: 'current.json',
+      texture: { items: [] },
+    };
+
+    expect(await fileMethods.newTexture.call(context)).toBe(false);
+
+    expect(context.selected_file).toBe('current.json');
+    expect(context.projectError).toContain('EEXIST');
+    expect(context.projectCreating).toBe(false);
+  });
+
   it('preserves explicitly disabled project settings while filling legacy defaults', () => {
     const texture = {
       items: [],

@@ -1,3 +1,4 @@
+import { version as buildVersion } from '../../package.json';
 import AppearanceSettings from '../components/AppearanceSettings.vue';
 import { readAccentPreference, applyAccentPreference } from '../utils/accentPreference';
 import { boxSelectionMethods } from './methods/boxSelectionMethods';
@@ -68,6 +69,9 @@ export default {
       save_timer: false,
       current_tab: 'texture',
       appVersion: '',
+      projectError: '',
+      projectCreating: false,
+      buildVersion,
       latestVersion: '',
       updateAvailable: false,
       updateCheckEnabled: 1,
@@ -78,7 +82,7 @@ export default {
       isItemSearchResizing: false,
       sidebarWidth: 230,
       isSidebarResizing: false,
-      lastItemSearchState: 'search',
+      lastItemSearchState: 'split',
       mcp: {
         running: false,
         clientCount: 0,
@@ -557,6 +561,7 @@ export default {
     });
   },
   beforeUnmount() {
+    this.disposeCanvasInteraction();
     this.finishBoxSelection();
     this.disposeItemMotion();
     this.stopZoomAnimation();

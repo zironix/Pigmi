@@ -5,7 +5,7 @@
     @dragover.prevent="onPanelDragOver"
     @drop.prevent="onPanelDrop"
   >
-    <div class="layers-panel-heading">
+    <div class="layers-panel-heading panel-heading">
       <span>Layers</span>
       <span v-if="search.normalizedQuery.value" class="layers-search-count" role="status">
         {{ search.results.value.matches.size }} found
@@ -19,6 +19,12 @@
       @dragover.prevent="onPanelDragOver"
       @drop.prevent="onPanelDrop"
     >
+      <div v-if="layerTree.items.length === 0" class="layers-empty" role="status">
+        <i class="las la-layer-group" aria-hidden="true"></i>
+        <strong>No layers yet</strong>
+        <p>Click an empty spot on the canvas to create your first element.</p>
+        <span>Use the folder button below to organize layers.</span>
+      </div>
       <LayersItem
         v-for="item in layerTree.items"
         :item="item"

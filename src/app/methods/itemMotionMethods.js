@@ -9,12 +9,26 @@ const timers = new WeakMap();
 
 export const itemMotionMethods = {
   beginItemMotion() {
-    clearTimeout(timers.get(this));
+    this.disposeItemMotion();
+    this.movingItemPreviews = [];
+    this.draw();
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const query = this.search?.toLowerCase();
+    const visible = this.texture.items.filter(
+      (item) => item.visible !== false && (!query || item.name?.toLowerCase().includes(query)),
+    );
+    // The motion overlay is above the scene. Animate only a topmost group so
+    // dragging a lower layer never changes its stacking order.
+    const firstSelected = visible.findIndex((item) => this.isItemSelected(item));
+    if (
+      firstSelected < 0 ||
+      visible.slice(firstSelected).some((item) => !this.isItemSelected(item))
+    )
+      return;
     const previews = [];
     let pixels = 0;
-    for (const source of this.texture.items) {
-      if (!this.isItemSelected(source) || source.visible === false) continue;
+    for (const source of visible.slice(firstSelected)) {
+      if (!source.colors?.length) continue;
       const bounds = getCanvasItemBounds(source);
       if (!bounds || bounds.width <= 0 || bounds.height <= 0) continue;
       pixels += Math.ceil(bounds.width) * Math.ceil(bounds.height);

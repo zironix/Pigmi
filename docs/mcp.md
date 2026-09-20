@@ -10,7 +10,7 @@ running while the client uses it. Pigmi does not include a model, provider accou
 1. Make Node.js available to the AI client. Node.js 22.12+ is suitable for both the adapter and
    development; the exact supported range is in [package.json](../package.json).
 2. Start Pigmi and open a document.
-3. Click the plug icon in the left sidebar: **MCP / Connect AI client**.
+3. Click the plug icon in the bottom-left tab bar: **MCP / Connect AI client**.
 4. Copy the generated configuration from the appropriate card:
    - **Codex:** CLI registration command or TOML configuration.
    - **Claude Desktop:** JSON configuration.

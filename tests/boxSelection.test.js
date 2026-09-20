@@ -39,13 +39,14 @@ describe('box selection', () => {
   });
   it('restores the initial selection and active item on cancel', () => {
     const context = {
-      boxSelection: { initialIds: [1, 2], initialActive: 1 },
+      boxSelection: { initialIds: [1, 2], initialActive: 1, initialActiveType: 'folder' },
       ls: { selected: [2], active_id: 2 },
       finishBoxSelection: vi.fn(),
     };
     boxSelectionMethods.cancelBoxSelection.call(context);
     expect(context.ls.selected).toEqual([1, 2]);
     expect(context.ls.active_id).toBe(1);
+    expect(context.ls.active_type).toBe('folder');
     expect(context.finishBoxSelection).toHaveBeenCalledOnce();
   });
 });
