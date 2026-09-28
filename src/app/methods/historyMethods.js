@@ -47,11 +47,8 @@ export const historyMethods = {
         target?.isContentEditable)
     )
       return;
-    if (event === 'click' && !this.current_color_offset_first_change) {
+    if (event?.type === 'click' && !target?.closest?.('.color-offset-slider, .draggable-color')) {
       this.current_color_offset = -1;
-      this.current_color_offset_first_change = false;
-    } else if (this.current_color_offset_first_change) {
-      this.current_color_offset_first_change = false;
     }
     if (event === 'before' || event === 'after') {
       this.pushUndoSnapshot();
@@ -119,7 +116,6 @@ export const historyMethods = {
   },
   offsetDrag(index) {
     this.current_color_offset = index;
-    this.current_color_offset_first_change = true;
   },
   close() {
     window.electronAPI.closeWindow();

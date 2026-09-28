@@ -1,0 +1,10 @@
+schema_version = "1.0.0"
+id = "pigmi_modeler"
+version = "0.4.1"
+name = "Pigmi Modeler"
+tagline = "Click to build polygons and drag to shape low-poly forms"
+maintainer = "Pigmi"
+type = "add-on"
+tags = ["Mesh", "Modeling"]
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]

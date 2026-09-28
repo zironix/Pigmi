@@ -106,7 +106,6 @@ export default {
       boxSelection: null,
       resize_value: 0,
       drag: false,
-      current_color_offset_first_change: false,
       current_color_offset: -1,
 
       // Canvas selection and drag state.
@@ -376,6 +375,7 @@ export default {
       this.redrawCanvasAfterResize();
     },
     selected(newValue, oldValue) {
+      if (newValue !== oldValue) this.current_color_offset = -1;
       const fromLayers = this.is_syncing_layers;
       this.is_syncing_layers = false;
       if (newValue === false && this.isItemSearchSplitVisible) {

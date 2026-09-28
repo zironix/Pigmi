@@ -74,3 +74,21 @@ describe('document undo', () => {
     expect(state.texture.layers[0].collapsed).toBe(true);
   });
 });
+
+describe('color stop selection', () => {
+  it('survives release and click in the slider or picker, and clears on an outside click', () => {
+    const state = editor();
+    state.offsetDrag(1);
+    state.addUndo({ type: 'pointerup' });
+    expect(state.current_color_offset).toBe(1);
+    for (const area of ['.color-offset-slider', '.draggable-color']) {
+      state.addUndo({
+        type: 'click',
+        target: { closest: (selector) => (selector.includes(area) ? {} : null) },
+      });
+      expect(state.current_color_offset).toBe(1);
+    }
+    state.addUndo({ type: 'click', target: { closest: () => null } });
+    expect(state.current_color_offset).toBe(-1);
+  });
+});

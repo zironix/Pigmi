@@ -449,7 +449,7 @@ body {
 #app-window .pico .gradient {
   border-radius: 5px;
 }
-#app-window .draggable-color.selected > div {
+#app-window .draggable-color.selected > .pico {
   box-shadow: inset 0 0 0 1px var(--studio-accent);
 }
 #app-window .sidebar2 .colors .bottom-buttons {

@@ -11,7 +11,7 @@
     @change="addUndo"
     @pointerup="addUndo"
     @keyup="addUndo"
-    @click="addUndo('click')"
+    @click="addUndo"
     @dragend="addUndo"
   >
     <div class="top-controls">
@@ -219,9 +219,9 @@
           :enable-cross="false"
           @dragStart="offsetDrag"
         >
-          <template v-slot:dot="{ focus, index }">
+          <template v-slot:dot="{ index }">
             <div
-              :class="['custom-dot', { focus }]"
+              :class="['custom-dot', { focus: index === current_color_offset }]"
               :style="{
                 background: `rgba(${texture.items[selected].colors[index].rgba.r}, ${texture.items[selected].colors[index].rgba.g}, ${texture.items[selected].colors[index].rgba.b}, ${texture.items[selected].colors[index].rgba.a})`,
               }"
@@ -899,6 +899,7 @@
             :index="index"
             class="draggable-color"
             :class="{ selected: index === current_color_offset }"
+            @click.capture="offsetDrag(index)"
           >
             <Colorpicker2
               :remove="removeColor"

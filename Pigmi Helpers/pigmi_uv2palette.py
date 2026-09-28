@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Pigmi: UV to Palette",
     "author": "Oleg Pavlov",
-    "version": (1, 9, 11),
+    "version": (1, 14, 0),
     "blender": (5, 0, 0),
     "location": "3D View > Sidebar > Snap UV",
     "description": (
@@ -14,8 +14,10 @@ import bpy
 import bmesh
 import math
 import time
+import json
+import numpy as np
 from array import array
-from mathutils import Vector
+from mathutils import Vector, Quaternion
 from mathutils.bvhtree import BVHTree
 from bpy_extras import view3d_utils
 
@@ -82,7 +84,13 @@ def clear_uv_box_preview():
             pass
 
 
+def draw_palette_overlays():
+    draw_path_gradient_overlay()
+    draw_gradient_snap_target()
+
+
 def draw_path_gradient_overlay():
+    draw_editable_gradient_overlay()
     scene = bpy.context.scene
     if scene is None or not hasattr(scene, "snap_uv_path_points"):
         return
@@ -107,7 +115,7 @@ def draw_path_gradient_overlay():
 
     if getattr(scene, "snap_uv_path_style", "FREEHAND") == 'FREEHAND':
         screen_points = filter_screen_points(screen_points, min_distance=4.0)
-    else:
+    elif scene.snap_uv_path_style == 'STRAIGHT':
         screen_points = [screen_points[0], screen_points[-1]]
 
     gpu.state.blend_set('ALPHA')
@@ -248,7 +256,7 @@ def smooth_freehand_screen_points(points, strength):
     return smooth_screen_points(filtered, iterations=iterations)
 
 
-def build_screen_polyline_batch(batch_for_shader, points, width, gradient=False):
+def build_screen_polyline_batch(batch_for_shader, points, width, gradient=False, point_colors=None):
     import gpu
 
     vertices = []
@@ -273,8 +281,8 @@ def build_screen_polyline_batch(batch_for_shader, points, width, gradient=False)
         ])
         indices.extend([(base, base + 1, base + 2), (base + 2, base + 1, base + 3)])
         if gradient:
-            start_color = preview_gradient_color(index / segment_count)
-            end_color = preview_gradient_color((index + 1) / segment_count)
+            start_color = point_colors[index] if point_colors is not None else preview_gradient_color(index / segment_count)
+            end_color = point_colors[index + 1] if point_colors is not None else preview_gradient_color((index + 1) / segment_count)
             colors.extend([start_color, start_color, end_color, end_color])
 
     if not vertices:
@@ -321,7 +329,7 @@ def ensure_path_gradient_overlay():
     global path_gradient_draw_handle
     if path_gradient_draw_handle is None:
         path_gradient_draw_handle = bpy.types.SpaceView3D.draw_handler_add(
-            draw_path_gradient_overlay, (), 'WINDOW', 'POST_PIXEL')
+            draw_palette_overlays, (), 'WINDOW', 'POST_PIXEL')
 
 
 def remove_path_gradient_overlay():
@@ -936,30 +944,105 @@ def apply_path_gradient_uvs(loops_data, obj, uv_layer, path_points, target_min_u
             loop[uv_layer].uv = Vector((target_min_u + progress * effective_cell_width_uv, center_v))
 
 
+def gradient_projected_vertices(loops_data, obj, region, rv3d):
+    """Project each selected vertex once, keeping all of its UV corners."""
+    groups = {}
+    for loop, _ in loops_data:
+        groups.setdefault(loop.vert, []).append(loop)
+    points, corners = [], []
+    matrix = obj.matrix_world
+    for vert, loops in groups.items():
+        point = view3d_utils.location_3d_to_region_2d(region, rv3d, matrix @ vert.co)
+        if point is not None:
+            points.append((point.x, point.y))
+            corners.append(loops)
+    return np.asarray(points, dtype=np.float64).reshape((-1, 2)), corners
+
+
+def gradient_screen_progress(points, path):
+    """Nearest-segment progress, vectorized in bounded blocks for dense meshes."""
+    path = np.asarray(path, dtype=np.float64)
+    starts = path[:-1]
+    delta = path[1:] - starts
+    squared = np.sum(delta * delta, axis=1)
+    lengths = np.sqrt(squared)
+    offsets = np.cumsum(lengths) - lengths
+    total = lengths.sum()
+    if total <= 1e-12:
+        return np.zeros(len(points), dtype=np.float64)
+    valid = squared > 1e-24
+    starts, delta = starts[valid], delta[valid]
+    squared, lengths, offsets = squared[valid], lengths[valid], offsets[valid]
+    result = np.empty(len(points), dtype=np.float64)
+    # Bound the temporary vertex x segment matrices, including long freehand paths.
+    block_size = max(1, min(1024, 131072 // max(1, len(starts))))
+    for start in range(0, len(points), block_size):
+        block = points[start:start+block_size]
+        dx = block[:, None, 0] - starts[None, :, 0]
+        dy = block[:, None, 1] - starts[None, :, 1]
+        t = np.clip((dx*delta[:, 0] + dy*delta[:, 1]) / squared, 0.0, 1.0)
+        dx -= t*delta[:, 0]
+        dy -= t*delta[:, 1]
+        nearest = np.argmin(dx*dx + dy*dy, axis=1)
+        rows = np.arange(len(block))
+        result[start:start+len(block)] = (offsets[nearest] + t[rows, nearest]*lengths[nearest]) / total
+    return result
+
+
+def closed_face_progress(values):
+    """Keep a seam-crossing face on one end of the palette, without changing topology."""
+    if len(values) < 2 or max(values)-min(values) <= 0.5:
+        return values
+    ordered = sorted(value % 1.0 for value in values)
+    gaps = [ordered[i+1]-ordered[i] for i in range(len(ordered)-1)]
+    gaps.append(ordered[0]+1.0-ordered[-1])
+    gap = max(range(len(gaps)), key=gaps.__getitem__)
+    if gap == len(ordered)-1:
+        return values
+    start = ordered[gap+1]
+    unwrapped = [value % 1.0 + (1.0 if value % 1.0 < start else 0.0) for value in values]
+    # Choose the side that clips the least. Clipping stays inside the palette
+    # cell; unrestricted UV wrapping would sample neighboring cells instead.
+    high_cost = sum(max(0.0, value-1.0)**2 for value in unwrapped)
+    low_cost = sum(min(0.0, value-1.0)**2 for value in unwrapped)
+    shift = 0.0 if high_cost <= low_cost else 1.0
+    return [max(0.0, min(1.0, value-shift)) for value in unwrapped]
+
+
 def apply_path_gradient_screen_uvs(loops_data, obj, uv_layer, screen_points, region, rv3d,
                                    target_min_u, target_min_v, effective_cell_width_uv,
-                                   effective_cell_height_uv, direction):
+                                   effective_cell_height_uv, direction, projected=None, closed=False):
     if not loops_data or len(screen_points) < 2:
         return
-
+    points, corners = projected if projected is not None else gradient_projected_vertices(
+        loops_data, obj, region, rv3d)
+    values = gradient_screen_progress(points, screen_points)
+    if closed:
+        # UV corners on adjacent faces may intentionally differ at the seam.
+        faces = {}
+        for progress, loops in zip(values, corners):
+            for loop in loops:
+                faces.setdefault(loop.face, []).append((loop, float(progress)))
+        for face, samples in faces.items():
+            progress = [value for _loop, value in samples]
+            # A partial face selection must not alter its unselected corners.
+            if len(samples) == len(face.loops):
+                progress = closed_face_progress(progress)
+            for (loop, _old), value in zip(samples, progress):
+                set_loop_gradient_uv(loop, uv_layer, value, target_min_u, target_min_v,
+                                     effective_cell_width_uv, effective_cell_height_uv, direction)
+        return
     center_v = target_min_v + effective_cell_height_uv * 0.5
     center_u = target_min_u + effective_cell_width_uv * 0.5
-    world_matrix = obj.matrix_world
-
-    for loop, _uv_orig in loops_data:
-        world_point = world_matrix @ loop.vert.co
-        screen_point = view3d_utils.location_3d_to_region_2d(region, rv3d, world_point)
-        if screen_point is None:
-            continue
-        progress, _distance = closest_path_progress(screen_point, screen_points)
-        if direction == 'RIGHT_TO_LEFT':
-            loop[uv_layer].uv = Vector((target_min_u + (1.0 - progress) * effective_cell_width_uv, center_v))
-        elif direction == 'BOTTOM_TO_TOP':
-            loop[uv_layer].uv = Vector((center_u, target_min_v + progress * effective_cell_height_uv))
-        elif direction == 'TOP_TO_BOTTOM':
-            loop[uv_layer].uv = Vector((center_u, target_min_v + (1.0 - progress) * effective_cell_height_uv))
+    for progress, loops in zip(values, corners):
+        if direction in {'RIGHT_TO_LEFT', 'TOP_TO_BOTTOM'}:
+            progress = 1.0-progress
+        if direction in {'BOTTOM_TO_TOP', 'TOP_TO_BOTTOM'}:
+            uv = (center_u, target_min_v + float(progress)*effective_cell_height_uv)
         else:
-            loop[uv_layer].uv = Vector((target_min_u + progress * effective_cell_width_uv, center_v))
+            uv = (target_min_u + float(progress)*effective_cell_width_uv, center_v)
+        for loop in loops:
+            loop[uv_layer].uv = uv
 
 
 def safe_gradient_bounds(target_min_u, target_min_v,
@@ -1302,12 +1385,23 @@ def init_properties():
     sc.snap_uv_path_colors = bpy.props.StringProperty(
         name="Path Colors", default="",
         description="Internal sampled colors for the path gradient preview.")
+    sc.snap_uv_cavity_expanded = bpy.props.BoolProperty(
+        name="Cavity / Fake AO", default=False,
+        description="Show cavity and fake ambient occlusion settings")
+    sc.snap_uv_gradient_snap = bpy.props.BoolProperty(
+        name="Snap Gradient Points", default=False,
+        description="Snap gradient controls to mesh vertices, edge midpoints and face centers within 14 pixels. F8 toggles while painting")
+    sc.snap_uv_show_gradients = bpy.props.BoolProperty(
+        name="Show Gradient Handles", default=True,
+        description="Show and edit saved gradients on the selection while painting. Projection and fitting do not create gradient handles")
     sc.snap_uv_path_style = bpy.props.EnumProperty(
         name="Path Style",
         default='FREEHAND',
         items=[
             ('FREEHAND', "Freehand", "Draw a freehand path in the 3D View"),
             ('STRAIGHT', "Straight", "Draw a straight gradient line from press to release"),
+            ('BEZIER', "Bezier", "Hold Tab and click to add points; drag to shape handles; release Tab to finish"),
+            ('CIRCLE', "Circle", "Tab+drag draws a circle; drag its two axis handles independently to make an ellipse"),
         ],
         description="How Tab+Left Mouse draws path gradients.")
     sc.snap_uv_gradient_direction = bpy.props.EnumProperty(
@@ -1401,14 +1495,14 @@ def clear_properties():
         "snap_uv_preserve", "snap_uv_independent",
         "snap_uv_path_points", "snap_uv_path_screen_points",
         "snap_uv_path_debug", "snap_uv_path_colors",
-        "snap_uv_path_style", "snap_uv_gradient_direction",
+        "snap_uv_path_style", "snap_uv_gradient_direction", "snap_uv_show_gradients", "snap_uv_gradient_snap",
         "snap_uv_path_stabilizer", "snap_uv_cavity_strength",
         "snap_uv_edge_strength", "snap_uv_edge_threshold",
         "snap_uv_edge_falloff", "snap_uv_cavity_smooth",
         "snap_uv_cavity_contrast", "snap_uv_cavity_bias",
         "snap_uv_cavity_invert", "snap_uv_cavity_auto_preview",
         "snap_uv_last_cell_x", "snap_uv_last_cell_y_top",
-        "snap_uv_painting_active",
+        "snap_uv_painting_active", "snap_uv_cavity_expanded",
     )
     for property_name in property_names:
         if hasattr(sc, property_name):
@@ -1416,6 +1510,10 @@ def clear_properties():
 
 
 def reset_painting_state():
+    global active_gradient_painter
+    if active_gradient_painter is not None:
+        active_gradient_painter.finish_painting(bpy.context)
+    active_gradient_painter = None
     clear_uv_box_preview()
     try:
         scenes = list(bpy.data.scenes)
@@ -1449,6 +1547,14 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         return obj is not None and obj.type == 'MESH' and obj.mode == 'EDIT'
 
     def invoke(self, context, event):
+        global active_gradient_painter
+        self.gradient_editor = None
+        self.gradient_snap_cache = None
+        self.gradient_snap_target = None
+        self.gradient_signature = None
+        self.last_gradient_sync = 0.0
+        self.paint_undo = []
+        self.paint_redo = []
         if not context.tool_settings.use_uv_select_sync:
             self.report({'ERROR'}, "UV Sync Selection must be enabled in the UV Editor")
             return {'CANCELLED'}
@@ -1493,7 +1599,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
 
         self.obj = obj
         context.scene.snap_uv_painting_active = True
-        self.stop_timer = context.window_manager.event_timer_add(0.2, window=context.window)
+        self.stop_timer = context.window_manager.event_timer_add(0.05, window=context.window)
         self.area = view_area
         self.region = None
         for region in self.area.regions:
@@ -1549,6 +1655,8 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.finish_painting(context, restore_previous=True)
             return {'CANCELLED'}
         context.window_manager.modal_handler_add(self)
+        active_gradient_painter = self
+        self.sync_gradient_editor(context, force=True)
         self.report({'INFO'}, "Last cell selected. Paint now or click another palette cell.")
         return {'RUNNING_MODAL'}
 
@@ -1562,6 +1670,13 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.stop_timer = None
 
     def finish_painting(self, context, restore_previous=False):
+        global active_gradient_painter
+        if self.gradient_editor is not None:
+            if self.gradient_editor.drag is not None or self.gradient_editor.building:
+                self.gradient_editor.finish(cancel=True)
+            self.gradient_editor = None
+        if active_gradient_painter is self:
+            active_gradient_painter = None
         if restore_previous:
             context.scene.snap_uv_path_points = self.previous_path_points
             context.scene.snap_uv_path_screen_points = self.previous_screen_points
@@ -1629,17 +1744,38 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.rv3d = rv3d
         if self.region is None:
             return Vector((event.mouse_x, event.mouse_y))
-        return Vector((event.mouse_x - self.region.x, event.mouse_y - self.region.y))
+        mouse = Vector((event.mouse_x - self.region.x, event.mouse_y - self.region.y))
+        first = not self.screen_points
+        if first:
+            self.gradient_snap_cache = None
+            self.stroke_start_snap = None
+            self.stroke_end_snap = None
+        self.gradient_snap_target = None
+        if self.scene.snap_uv_path_style == 'STRAIGHT' or first:
+            local = gradient_snap_point(self, mouse, None)
+            if first:
+                self.stroke_start_snap = local.copy() if local is not None else None
+            self.stroke_end_snap = local.copy() if local is not None else None
+            if local is not None:
+                return view3d_utils.location_3d_to_region_2d(
+                    self.region, self.rv3d, self.obj.matrix_world @ local)
+        else:
+            self.stroke_end_snap = None
+        return mouse
 
     def append_point(self, point, screen_point):
         if screen_point is None:
             return
         stabilizer = getattr(self.scene, "snap_uv_path_stabilizer", 0.55)
-        screen_point = stabilized_screen_point(self.last_screen_point, screen_point, stabilizer)
-        min_distance = 2.0 + stabilizer * 5.0
+        snapped = self.gradient_snap_target is not None
+        if snapped:
+            point = self.obj.matrix_world @ self.gradient_snap_target[0]
+        else:
+            screen_point = stabilized_screen_point(self.last_screen_point, screen_point, stabilizer)
+        min_distance = 0.001 if snapped else 2.0 + stabilizer * 5.0
         if self.last_screen_point is not None and (screen_point - self.last_screen_point).length < min_distance:
             return
-        if point is not None and self.points and (point - self.points[-1]).length < self.min_point_distance:
+        if not snapped and point is not None and self.points and (point - self.points[-1]).length < self.min_point_distance:
             return
         if point is not None:
             self.points.append(point)
@@ -1858,6 +1994,24 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         self.last_applied_selection_signature = loops_selection_signature(loops_data)
         self.last_applied_settings_signature = self.fit_settings_signature(context)
         self.last_action_mode = 'PATH'
+        bm.faces.index_update()
+        bm.verts.index_update()
+        local_path = gradient_local_path(obj, loops_data, self.screen_points, self.region, self.rv3d)
+        # Screen coordinates lose surface depth. Keep actual snapped mesh positions
+        # so the saved handles remain attached when the view changes.
+        if getattr(self, 'stroke_start_snap', None) is not None:
+            local_path[0] = list(self.stroke_start_snap)
+        if getattr(self, 'stroke_end_snap', None) is not None:
+            local_path[-1] = list(self.stroke_end_snap)
+        save_gradient_record(obj, uv_layer, loops_data, {
+            'kind': context.scene.snap_uv_path_style,
+            'path': local_path,
+            'bounds': [path_min_u, path_min_v, path_width_uv, path_height_uv],
+            'direction': self.gradient_direction,
+            'colors': context.scene.snap_uv_path_colors,
+        })
+        self.sync_gradient_editor(context, force=True)
+        redraw_all_areas(context)
         return True
 
     def pick_source_object(self, context, event):
@@ -1910,6 +2064,8 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.target_min_u, self.target_min_v, self.effective_cell_width_uv,
             self.effective_cell_height_uv, self.gradient_direction)
         bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+        forget_gradient_records(obj, uv_layer, loops_data)
+        self.gradient_signature = None
         self.last_applied_cell_min = Vector((self.target_min_u, self.target_min_v))
         self.last_applied_cell_size = Vector((self.effective_cell_width_uv, self.effective_cell_height_uv))
         self.last_applied_selection_signature = loops_selection_signature(loops_data)
@@ -1948,6 +2104,8 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.effective_cell_width_uv, self.effective_cell_height_uv,
             self.gradient_direction)
         bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+        forget_gradient_records(obj, uv_layer, loops_data)
+        self.gradient_signature = None
         self.last_applied_cell_min = Vector((self.target_min_u, self.target_min_v))
         self.last_applied_cell_size = Vector((self.effective_cell_width_uv, self.effective_cell_height_uv))
         self.last_applied_selection_signature = loops_selection_signature(loops_data)
@@ -1984,6 +2142,8 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             return False
 
         bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+        forget_gradient_records(obj, uv_layer, loops_data)
+        self.gradient_signature = None
         self.last_applied_cell_min = Vector((self.target_min_u, self.target_min_v))
         self.last_applied_cell_size = Vector((self.effective_cell_width_uv, self.effective_cell_height_uv))
         self.last_applied_selection_signature = loops_selection_signature(loops_data)
@@ -2043,6 +2203,26 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         if not all_selected_loops:
             self.report({'ERROR'}, "No UVs selected")
             return False
+        undo_loops = all_selected_loops
+        bm.faces.index_update()
+        bm.verts.index_update()
+        if not project_from_view:
+            record = matching_gradient(obj, uv_layer, all_selected_loops)
+            if record is not None:
+                bounds = safe_gradient_bounds(
+                    self.target_min_u, self.target_min_v,
+                    self.effective_cell_width_uv, self.effective_cell_height_uv,
+                    self.margin_x_uv, self.margin_y_uv,
+                    context.scene.snap_uv_texture_width, context.scene.snap_uv_texture_height)
+                if remap_saved_gradient(obj, uv_layer, all_selected_loops, record, bounds,
+                                        self.gradient_direction, context.scene.snap_uv_path_colors):
+                    bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+                    obj.data.update()
+                    self.last_action_mode = 'PATH'
+                    self.last_applied_selection_signature = None
+                    self.sync_gradient_editor(context, force=True)
+                    redraw_all_areas(context)
+                    return True
         current_signature = loops_selection_signature(all_selected_loops)
         current_settings_signature = self.fit_settings_signature(context)
         if (not project_from_view and
@@ -2060,6 +2240,8 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                         self.target_min_u + rel_x * self.effective_cell_width_uv,
                         self.target_min_v + rel_y * self.effective_cell_height_uv))
                 bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+                forget_gradient_records(obj, uv_layer, undo_loops)
+                self.gradient_signature = None
                 self.last_applied_cell_min = Vector((self.target_min_u, self.target_min_v))
                 self.last_applied_cell_size = Vector((self.effective_cell_width_uv, self.effective_cell_height_uv))
                 self.last_applied_selection_signature = current_signature
@@ -2107,6 +2289,8 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             return False
 
         bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+        forget_gradient_records(obj, uv_layer, undo_loops)
+        self.gradient_signature = None
         self.last_applied_cell_min = Vector((self.target_min_u, self.target_min_v))
         self.last_applied_cell_size = Vector((self.effective_cell_width_uv, self.effective_cell_height_uv))
         self.last_applied_selection_signature = current_signature
@@ -2116,7 +2300,170 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.report({'INFO'}, "Projected from view and moved to palette cell")
         return True
 
+    def sync_gradient_editor(self, context, force=False):
+        editor = self.gradient_editor
+        if editor is not None and (editor.drag is not None or editor.building):
+            return
+        if self.drawing or not context.scene.snap_uv_show_gradients:
+            self.gradient_editor = None
+            self.gradient_signature = None
+            self.area.tag_redraw()
+            return
+        selection = gradient_selection(context)
+        if selection is None:
+            self.gradient_editor = None
+            self.gradient_signature = None
+            self.area.tag_redraw()
+            return
+        obj, _bm, uv, loops = selection
+        signature = (obj.as_pointer(), uv.name, tuple(gradient_loop_keys(loops)),
+                     tuple(tuple(loop[uv].uv) for loop, _ in loops),
+                     obj.data.get(GRADIENT_RECORDS_KEY, ''))
+        if (not force and signature == self.gradient_signature
+                and (editor is None or (editor.bm.is_valid and all(loop.is_valid for loop, _ in editor.loops)))):
+            return
+        self.gradient_signature = signature
+        record = matching_gradient(obj, uv, loops)
+        self.gradient_editor = PaletteGradientEdit(self, selection, record) if record else None
+        self.area.tag_redraw()
+
+    def preview_first_snap(self, context, event):
+        editor = self.gradient_editor
+        if self.drawing or (editor is not None and (editor.drag is not None or editor.building)):
+            return
+        if event.type not in {'MOUSEMOVE', 'TAB', 'F8', 'LEFT_SHIFT', 'RIGHT_SHIFT'}:
+            return
+        held = event.value != 'RELEASE' if event.type == 'TAB' else self.draw_modifier_held
+        if not held or event.shift or not context.scene.snap_uv_gradient_snap:
+            self.gradient_snap_target = None
+            self.area.tag_redraw()
+            return
+        area, region, rv3d = view3d_under_mouse(context, event)
+        if area is None or mouse_over_ui_region(context, event):
+            self.gradient_snap_target = None
+            self.area.tag_redraw()
+            return
+        if event.type == 'TAB' and event.value == 'PRESS':
+            self.gradient_snap_cache = None
+        self.area, self.region, self.rv3d = area, region, rv3d
+        mouse = Vector((event.mouse_x-region.x, event.mouse_y-region.y))
+        gradient_snap_point(self, mouse, None)
+        self.area.tag_redraw()
+
+    def undo_paint_step(self, context, redo=False):
+        editor = self.gradient_editor
+        if editor is not None and (editor.drag is not None or editor.building):
+            editor.finish(cancel=True)
+            editor.building = False
+            self.gradient_editor = None
+            self.sync_gradient_editor(context, force=True)
+            return
+        if self.drawing:
+            self.drawing = False
+            self.points, self.screen_points = [], []
+            self.last_screen_point = None
+            self.clear_current_path(context)
+            self.sync_gradient_editor(context, force=True)
+            return
+        source, target = (self.paint_redo, self.paint_undo) if redo else (self.paint_undo, self.paint_redo)
+        if not source:
+            self.report({'INFO'}, 'No more painting steps to redo' if redo else 'No more painting steps to undo')
+            return
+        step = source[-1]
+        bm = bmesh.from_edit_mesh(self.obj.data)
+        bm.faces.ensure_lookup_table()
+        bm.verts.index_update()
+        uv = bm.loops.layers.uv.get(step['layer'])
+        expected = step['before'] if redo else step['after']
+        desired = step['after'] if redo else step['before']
+        records = step['records_before'] if redo else step['records_after']
+        resolved = []
+        valid = (uv is not None and (len(bm.verts), len(bm.edges), len(bm.faces)) == step['topology']
+                 and self.obj.data.get(GRADIENT_RECORDS_KEY, '[]') == records)
+        if valid:
+            for key, old_uv in expected.items():
+                face, corner, vert = map(int, key.split(':'))
+                if face >= len(bm.faces) or corner >= len(bm.faces[face].loops):
+                    valid = False
+                    break
+                loop = bm.faces[face].loops[corner]
+                if loop.vert.index != vert or (loop[uv].uv-Vector(old_uv)).length > 1e-5:
+                    valid = False
+                    break
+                resolved.append((loop, desired[key]))
+        if not valid:
+            self.paint_undo.clear()
+            self.paint_redo.clear()
+            self.report({'WARNING'}, 'Painting history reset: mesh or UVs were changed outside painting')
+            return
+        for loop, value in resolved:
+            loop[uv].uv = value
+        self.obj.data[GRADIENT_RECORDS_KEY] = step['records_after'] if redo else step['records_before']
+        bmesh.update_edit_mesh(self.obj.data, loop_triangles=False, destructive=False)
+        self.obj.data.update()
+        source.pop()
+        target.append(step)
+        self.gradient_editor = None
+        self.gradient_signature = None
+        self.gradient_snap_cache = None
+        self.gradient_snap_target = None
+        self.last_action_mode = None
+        self.last_applied_selection_signature = None
+        self.sync_gradient_editor(context, force=True)
+        redraw_all_areas(context)
+
+    def handle_gradient_event(self, context, event):
+        editor = self.gradient_editor
+        # Finish only the in-progress handle gesture; the painting session stays active.
+        if editor is not None and (editor.drag is not None or editor.building):
+            return editor.event(context, event)
+        if (event.type == 'LEFTMOUSE' and event.value == 'PRESS'
+                and self.draw_modifier_held and not event.shift
+                and context.scene.snap_uv_path_style in {'BEZIER', 'CIRCLE'}):
+            area, region, rv3d = view3d_under_mouse(context, event)
+            if area is None or mouse_over_ui_region(context, event):
+                return False
+            self.area, self.region, self.rv3d = area, region, rv3d
+            if not self.refresh_live_settings(context):
+                return True
+            selection = gradient_selection(context)
+            if selection is None:
+                self.report({'WARNING'}, 'Select mesh faces with UVs first')
+                return True
+            bounds = safe_gradient_bounds(
+                self.target_min_u, self.target_min_v,
+                self.effective_cell_width_uv, self.effective_cell_height_uv,
+                self.margin_x_uv, self.margin_y_uv,
+                context.scene.snap_uv_texture_width, context.scene.snap_uv_texture_height)
+            record = dict(kind=context.scene.snap_uv_path_style, nodes=[], path=[], bounds=list(bounds),
+                          direction=self.gradient_direction, colors=context.scene.snap_uv_path_colors)
+            self.clear_current_path(context)
+            self.gradient_snap_cache = None
+            self.gradient_editor = PaletteGradientEdit(self, selection, record, building=True)
+            self.last_action_mode = None
+            return self.gradient_editor.event(context, event)
+        if not context.scene.snap_uv_show_gradients or self.drawing:
+            if editor is not None:
+                editor.set_hover(None)
+            return False
+        if editor is not None:
+            if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
+                editor.set_hover(editor.hit_control(context, event))
+            elif event.type in {'TAB', 'LEFT_SHIFT', 'RIGHT_SHIFT', 'LEFT_CTRL', 'RIGHT_CTRL',
+                                'LEFT_ALT', 'RIGHT_ALT', 'OSKEY', 'WINDOW_DEACTIVATE',
+                                'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE'}:
+                editor.set_hover(None)
+        if event.type == 'LEFTMOUSE' and event.value == 'PRESS' and not self.draw_modifier_held:
+            # Selection may have changed since the previous timer tick.
+            self.sync_gradient_editor(context)
+            editor = self.gradient_editor
+            if editor is not None:
+                return editor.event(context, event)
+        return False
+
+
     def clear_current_path(self, context):
+        self.gradient_snap_target = None
         context.scene.snap_uv_path_points = ""
         context.scene.snap_uv_path_screen_points = ""
         redraw_view3d_areas(context)
@@ -2127,6 +2474,51 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.finish_painting(context)
             self.report({'INFO'}, "Painting stopped")
             return {'CANCELLED'}
+
+        if context.edit_object != self.obj or self.obj.mode != 'EDIT':
+            self.finish_painting(context)
+            return {'CANCELLED'}
+        if event.type == 'Z' and primary_modifier(event) and not event.alt and not mouse_over_ui_region(context, event):
+            if event.value == 'PRESS':
+                self.undo_paint_step(context, redo=event.shift)
+            return {'RUNNING_MODAL'}
+        self.preview_first_snap(context, event)
+        if event.type == 'F8' and not mouse_over_ui_region(context, event):
+            if event.value == 'PRESS':
+                context.scene.snap_uv_gradient_snap = not context.scene.snap_uv_gradient_snap
+                self.gradient_snap_target = None
+                self.preview_first_snap(context, event)
+                self.area.tag_redraw()
+            return {'RUNNING_MODAL'}
+
+        # Blender owns Select All / Deselect All (including customized A keymaps).
+        # Handle this before a gradient gesture can consume keyboard input.
+        if event.type == 'A':
+            if event.value == 'PRESS' and not mouse_over_ui_region(context, event):
+                editor = self.gradient_editor
+                if editor is not None and (editor.drag is not None or editor.building):
+                    editor.finish(cancel=True)
+                self.gradient_editor = None
+                self.gradient_signature = None
+                if self.drawing:
+                    self.drawing = False
+                    self.points = []
+                    self.screen_points = []
+                    self.last_screen_point = None
+                    self.clear_current_path(context)
+                self.draw_modifier_held = False
+                self.edit_bvh = None
+                self.uv_mouse_press = None
+                self.uv_mouse_dragging = False
+                self.swallow_uv_mouse_type = None
+                clear_uv_box_preview()
+                # The next timer sees Blender's updated selection, after pass-through.
+                self.last_gradient_sync = 0.0
+                self.area.tag_redraw()
+            return {'PASS_THROUGH'}
+
+        if self.handle_gradient_event(context, event):
+            return {'RUNNING_MODAL'}
 
         if event.type in {'RIGHTMOUSE', 'ESC'}:
             self.finish_painting(context, restore_previous=self.state == 'PICK_CELL')
@@ -2139,9 +2531,11 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             return {'FINISHED'}
 
         if event.type == 'TIMER':
-            if getattr(event, "timer", None) == self.stop_timer:
+            now = time.perf_counter()
+            if now - self.last_gradient_sync >= 0.05:
+                self.last_gradient_sync = now
                 self.maybe_auto_preview_cavity(context)
-                return {'RUNNING_MODAL'}
+                self.sync_gradient_editor(context)
             return {'PASS_THROUGH'}
 
         if event.type in {'LEFT_ALT', 'RIGHT_ALT'}:
@@ -2344,6 +2738,9 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
 
         if event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self.drawing:
             self.drawing = False
+            if context.scene.snap_uv_path_style == 'STRAIGHT' and self.screen_points:
+                endpoint = self.mouse_screen_point(context, event)
+                self.screen_points = [self.screen_points[0], endpoint]
             if len(self.screen_points) == 1:
                 self.append_point(self.raycast_mesh(context, event), self.mouse_screen_point(context, event))
             if len(self.screen_points) < 2:
@@ -2381,6 +2778,715 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             return {'PASS_THROUGH'}
 
         return {'RUNNING_MODAL'}
+
+
+# --- Persistent, editable viewport gradients ---
+
+GRADIENT_RECORDS_KEY = "pigmi_editable_gradients_v1"
+active_gradient_painter = None
+
+
+def gradient_records(mesh):
+    try:
+        return json.loads(mesh.get(GRADIENT_RECORDS_KEY, "[]"))
+    except (ValueError, TypeError):
+        return []
+
+
+def gradient_loop_keys(loops):
+    return [f"{loop.face.index}:{list(loop.face.loops).index(loop)}:{loop.vert.index}"
+            for loop, _ in loops]
+
+
+def gradient_selection(context):
+    obj = context.edit_object
+    if obj is None or obj.type != 'MESH' or obj.mode != 'EDIT':
+        return None
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.faces.index_update()
+    bm.verts.index_update()
+    uv = bm.loops.layers.uv.active
+    if uv is None:
+        return None
+    loops = selected_face_loop_data(bm, uv, context.tool_settings)
+    return (obj, bm, uv, loops) if loops else None
+
+
+def matching_gradient(obj, uv, loops):
+    keys = gradient_loop_keys(loops)
+    for record in reversed(gradient_records(obj.data)):
+        saved = record.get("uvs", {})
+        if record.get("layer") != uv.name or not all(key in saved for key in keys):
+            continue
+        # UV edits and most topology edits invalidate the association instead of
+        # resurrecting a stroke that no longer describes this selection.
+        if all((loop[uv].uv - Vector(saved[key])).length < 1e-5
+               for key, (loop, _) in zip(keys, loops)):
+            return record
+    return None
+
+
+def remember_paint_step(obj, uv, loops, records_before):
+    painter = active_gradient_painter
+    if painter is None or painter.obj != obj:
+        return
+    keys = gradient_loop_keys(loops)
+    before = {key: list(value) for key, (_loop, value) in zip(keys, loops)}
+    after = {key: list(loop[uv].uv) for key, (loop, _value) in zip(keys, loops)}
+    records_after = obj.data.get(GRADIENT_RECORDS_KEY, '[]')
+    if before == after and records_before == records_after:
+        return
+    bm = bmesh.from_edit_mesh(obj.data)
+    painter.paint_undo.append(dict(layer=uv.name, before=before, after=after,
+                                   records_before=records_before, records_after=records_after,
+                                   topology=(len(bm.verts), len(bm.edges), len(bm.faces))))
+    del painter.paint_undo[:-64]
+    painter.paint_redo.clear()
+
+
+def save_gradient_record(obj, uv, loops, record):
+    records_before = obj.data.get(GRADIENT_RECORDS_KEY, '[]')
+    record = dict(record)
+    record["layer"] = uv.name
+    record["uvs"] = {key: list(loop[uv].uv)
+                     for key, (loop, _) in zip(gradient_loop_keys(loops), loops)}
+    records = gradient_records(obj.data)
+    touched = set(record["uvs"])
+    kept = []
+    for old in records:
+        if old.get("layer") == uv.name:
+            old["uvs"] = {k: v for k, v in old.get("uvs", {}).items() if k not in touched}
+        if old.get("uvs"):
+            kept.append(old)
+    obj.data[GRADIENT_RECORDS_KEY] = json.dumps(kept + [record], separators=(',', ':'))
+    remember_paint_step(obj, uv, loops, records_before)
+
+
+def remap_saved_gradient(obj, uv, loops, record, bounds, direction, colors):
+    """Move existing UV progress to a new cell without reprojecting the stroke."""
+    old_bounds = record['bounds']
+    old_direction = record['direction']
+    axis = 0 if old_direction in {'LEFT_TO_RIGHT', 'RIGHT_TO_LEFT'} else 1
+    extent = old_bounds[axis+2]
+    if extent <= 1e-12:
+        return False
+    for loop, old_uv in loops:
+        progress = (old_uv[axis]-old_bounds[axis]) / extent
+        if old_direction in {'RIGHT_TO_LEFT', 'TOP_TO_BOTTOM'}:
+            progress = 1.0-progress
+        set_loop_gradient_uv(loop, uv, progress, *bounds, direction)
+    updated = dict(record, bounds=list(bounds), direction=direction, colors=colors)
+    save_gradient_record(obj, uv, loops, updated)
+    return True
+
+
+def forget_gradient_records(obj, uv, loops):
+    records_before = obj.data.get(GRADIENT_RECORDS_KEY, '[]')
+    bm = bmesh.from_edit_mesh(obj.data)
+    bm.faces.index_update()
+    bm.verts.index_update()
+    touched = set(gradient_loop_keys(loops))
+    records = gradient_records(obj.data)
+    if not records:
+        remember_paint_step(obj, uv, loops, records_before)
+        return
+    kept = []
+    for record in records:
+        if record.get('layer') == uv.name:
+            record['uvs'] = {k: v for k, v in record.get('uvs', {}).items() if k not in touched}
+        if record.get('uvs'):
+            kept.append(record)
+    obj.data[GRADIENT_RECORDS_KEY] = json.dumps(kept, separators=(',', ':'))
+    remember_paint_step(obj, uv, loops, records_before)
+
+
+def gradient_local_path(obj, loops, screen_points, region, rv3d):
+    depth = sum((obj.matrix_world @ loop.vert.co for loop, _ in loops), Vector()) / len(loops)
+    inverse = obj.matrix_world.inverted_safe()
+    return [list(inverse @ view3d_utils.region_2d_to_location_3d(region, rv3d, p, depth))
+            for p in screen_points]
+
+
+def bezier_nodes(points):
+    nodes = []
+    for i, p in enumerate(points):
+        tangent = (points[min(i + 1, len(points) - 1)] - points[max(0, i - 1)]) / 6.0
+        nodes.append([list(p - tangent), list(p), list(p + tangent)])
+    return nodes
+
+
+def bezier_path(nodes):
+    points = []
+    for a, b in zip(nodes, nodes[1:]):
+        p0, p1, p2, p3 = Vector(a[1]), Vector(a[2]), Vector(b[0]), Vector(b[1])
+        for step in range(24):
+            t = step / 24.0
+            points.append((1-t)**3*p0 + 3*(1-t)**2*t*p1 + 3*(1-t)*t*t*p2 + t**3*p3)
+    if nodes:
+        points.append(Vector(nodes[-1][1]))
+    return points
+
+
+def gradient_colored_polyline(points, colors):
+    """Include every palette color stop, even when the path has only two points."""
+    if not points:
+        return [], []
+    colors = colors or [(0.25, 0.65, 1, 1)]
+    distances = [0.0]
+    for a, b in zip(points, points[1:]):
+        distances.append(distances[-1] + (b-a).length)
+    total = distances[-1]
+    def color_at(distance):
+        position = distance / max(total, 1e-9) * (len(colors)-1)
+        index = min(int(position), len(colors)-1)
+        weight = position-index
+        a, b = colors[index], colors[min(index+1, len(colors)-1)]
+        return tuple(x+(y-x)*weight for x, y in zip(a, b))
+    sampled, sampled_colors = [points[0]], [colors[0]]
+    stop = 1
+    for i, (a, b) in enumerate(zip(points, points[1:])):
+        start, end = distances[i], distances[i+1]
+        while stop < len(colors)-1 and total > 1e-9:
+            distance = total * stop / (len(colors)-1)
+            if distance >= end:
+                break
+            if distance > start and end-start > 1e-9:
+                sampled.append(a.lerp(b, (distance-start)/(end-start)))
+                sampled_colors.append(colors[stop])
+            stop += 1
+        sampled.append(b)
+        sampled_colors.append(color_at(end))
+    return sampled, sampled_colors
+
+
+def draw_editable_gradient_overlay():
+    context = bpy.context
+    painter = active_gradient_painter
+    if painter is None or not context.scene.snap_uv_painting_active or painter.drawing:
+        return
+    editor = painter.gradient_editor
+    if editor is None or (not context.scene.snap_uv_show_gradients and not editor.building):
+        return
+    if context.area != editor.area or context.edit_object != editor.obj:
+        return
+    record, obj = editor.record, editor.obj
+    region = context.region
+    rv3d = getattr(context.space_data, 'region_3d', None)
+    if region is None or rv3d is None:
+        return
+    def project(point):
+        return view3d_utils.location_3d_to_region_2d(region, rv3d, obj.matrix_world @ Vector(point))
+    points = [project(p) for p in record['path']]
+    if not points or any(p is None for p in points):
+        return
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+    gpu.state.blend_set('ALPHA')
+    try:
+        batch = build_screen_polyline_batch(batch_for_shader, points, 12.0)
+        if batch:
+            shader.bind()
+            shader.uniform_float('color', (1, 1, 1, 0.85))
+            batch.draw(shader)
+        colors = deserialize_gradient_colors(record.get('colors', ''))
+        colored_points, point_colors = gradient_colored_polyline(points, colors)
+        batch = build_screen_polyline_batch(batch_for_shader, colored_points, 7.0,
+                                            gradient=True, point_colors=point_colors)
+        if batch:
+            color_shader = gpu.shader.from_builtin('SMOOTH_COLOR')
+            color_shader.bind()
+            batch.draw(color_shader)
+        nodes = record.get('nodes', []) if editor else []
+        if record.get('kind') == 'CIRCLE' and len(nodes) >= 2:
+            guide = [p for node in nodes[1:] for p in (project(nodes[0][1]), project(node[1]))]
+            if all(p is not None for p in guide):
+                batch = batch_for_shader(shader, 'LINES', {'pos': guide})
+                shader.bind()
+                shader.uniform_float('color', (1, 1, 1, 0.45))
+                batch.draw(shader)
+        for node in nodes:
+            handles = [project(p) for p in node]
+            if any(p is None for p in handles):
+                continue
+            if record.get('kind') == 'BEZIER':
+                batch = batch_for_shader(shader, 'LINE_STRIP', {'pos': handles})
+                shader.bind()
+                shader.uniform_float('color', (1, 0.65, 0.15, 1))
+                batch.draw(shader)
+                for p in (handles[0], handles[2]):
+                    draw_path_endpoint(batch_for_shader, shader, p, 5, (1, 0.65, 0.15, 1))
+            draw_path_endpoint(batch_for_shader, shader, handles[1], 7, (1, 1, 1, 1))
+        move_control = editor.move_handle_screen()
+        if move_control is not None:
+            draw_path_endpoint(batch_for_shader, shader, move_control, 9, (0.04, 0.13, 0.16, 1))
+            draw_path_endpoint(batch_for_shader, shader, move_control, 6, (0.15, 0.85, 1.0, 1))
+            cross = [move_control+Vector(offset) for offset in ((-4, 0), (4, 0), (0, -4), (0, 4))]
+            batch = batch_for_shader(shader, 'LINES', {'pos': cross})
+            shader.bind()
+            shader.uniform_float('color', (0, 0.15, 0.2, 1))
+            batch.draw(shader)
+        rotation = editor.rotation_handle_screen()
+        if rotation is not None:
+            rim, control = rotation
+            batch = batch_for_shader(shader, 'LINES', {'pos': [rim, control]})
+            shader.bind()
+            shader.uniform_float('color', (0.7, 0.4, 1.0, 1))
+            batch.draw(shader)
+            draw_path_endpoint(batch_for_shader, shader, control, 7, (0.7, 0.4, 1.0, 1))
+        active_control = editor.drag if editor.drag is not None else editor.hover
+        if active_control is not None:
+            index, handle = active_control
+            if index == -2:
+                point = move_control
+            elif index == -1:
+                point = rotation[1] if rotation is not None else None
+            else:
+                point = project(nodes[index][handle])
+            if point is not None:
+                draw_path_endpoint(batch_for_shader, shader, point, 12, (0.08, 0.08, 0.08, 1))
+                draw_path_endpoint(batch_for_shader, shader, point, 10, (1.0, 0.85, 0.1, 1))
+                draw_path_endpoint(batch_for_shader, shader, point, 5, (1, 1, 1, 1))
+        if not nodes:
+            for p in (points[0], points[-1]):
+                draw_path_endpoint(batch_for_shader, shader, p, 7, (1, 1, 1, 1))
+    finally:
+        gpu.state.blend_set('NONE')
+
+
+class GradientSnapCache:
+    """Screen-distance snapping on the active mesh; no per-move mesh traversal."""
+
+    def __init__(self, obj, region, rv3d):
+        self.obj, self.region, self.rv3d = obj, region, rv3d
+        self.key = None
+
+    def find(self, mouse):
+        key = (self.region.width, self.region.height,
+               tuple(v for row in self.rv3d.perspective_matrix for v in row),
+               tuple(v for row in self.obj.matrix_world for v in row))
+        if key != self.key:
+            bm = bmesh.from_edit_mesh(self.obj.data)
+            candidates = [(v.co.copy(), 'Vertex') for v in bm.verts if not v.hide]
+            candidates.extend(((e.verts[0].co+e.verts[1].co)*0.5, 'Edge midpoint')
+                              for e in bm.edges if not e.hide and not any(v.hide for v in e.verts))
+            candidates.extend((f.calc_center_median(), 'Face center') for f in bm.faces if not f.hide)
+            self.local, self.labels, screens = [], [], []
+            for point, label in candidates:
+                projected = view3d_utils.location_3d_to_region_2d(
+                    self.region, self.rv3d, self.obj.matrix_world @ point)
+                if projected is not None:
+                    self.local.append(point)
+                    self.labels.append(label)
+                    screens.append(tuple(projected))
+            self.screen = np.asarray(screens, dtype=np.float64).reshape((-1, 2))
+            self.key = key
+        if not len(self.screen):
+            return None
+        delta = self.screen - (mouse.x, mouse.y)
+        distances = np.sum(delta*delta, axis=1)
+        index = int(np.argmin(distances))
+        if distances[index] > 14.0**2:
+            return None
+        return self.local[index].copy(), self.labels[index]
+
+
+def gradient_snap_point(painter, mouse, fallback):
+    painter.gradient_snap_target = None
+    if not painter.scene.snap_uv_gradient_snap:
+        return fallback
+    cache = painter.gradient_snap_cache
+    if cache is None or cache.region != painter.region or cache.rv3d != painter.rv3d:
+        cache = GradientSnapCache(painter.obj, painter.region, painter.rv3d)
+        painter.gradient_snap_cache = cache
+    result = cache.find(mouse)
+    painter.gradient_snap_target = result
+    return result[0] if result is not None else fallback
+
+
+def draw_gradient_snap_target():
+    painter = active_gradient_painter
+    context = bpy.context
+    if (painter is None or not context.scene.snap_uv_painting_active
+            or not context.scene.snap_uv_gradient_snap or context.area != painter.area
+            or context.edit_object != painter.obj or painter.gradient_snap_target is None):
+        return
+    point, label = painter.gradient_snap_target
+    screen = view3d_utils.location_3d_to_region_2d(
+        painter.region, painter.rv3d, painter.obj.matrix_world @ point)
+    if screen is None:
+        return
+    import gpu
+    import blf
+    from gpu_extras.batch import batch_for_shader
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+    gpu.state.blend_set('ALPHA')
+    try:
+        draw_path_endpoint(batch_for_shader, shader, screen, 7, (0.05, 0.12, 0.15, 1))
+        draw_path_endpoint(batch_for_shader, shader, screen, 5, (0.1, 1.0, 0.85, 1))
+        blf.position(0, screen.x+14, screen.y+14, 0)
+        blf.size(0, 12)
+        blf.color(0, 0.1, 1.0, 0.85, 1)
+        blf.draw(0, label)
+    finally:
+        gpu.state.blend_set('NONE')
+
+
+def ellipse_point_phase(a, b, delta):
+    aa, ab, bb = a.dot(a), a.dot(b), b.dot(b)
+    determinant = aa*bb-ab*ab
+    if determinant <= 1e-12*max(aa*bb, 1e-20):
+        return None
+    da, db = delta.dot(a), delta.dot(b)
+    x, y = (da*bb-db*ab)/determinant, (db*aa-da*ab)/determinant
+    return math.atan2(y, x) if x*x+y*y > 1e-12 else None
+
+
+def ellipse_path(center, first_axis, second_axis, segments=96, phase=0.0):
+    a, b = first_axis-center, second_axis-center
+    points = [center + a*math.cos(phase+math.tau*i/segments) + b*math.sin(phase+math.tau*i/segments)
+              for i in range(segments)]
+    points.append(points[0].copy())
+    return points
+
+
+def circle_path(center, rim, normal, segments=96):
+    axis = rim-center
+    radius = axis.length
+    if radius <= 1e-8:
+        return [center.copy()]
+    tangent = normal.cross(axis)
+    if tangent.length <= 1e-8:
+        fallback = Vector((1, 0, 0)) if abs(axis.normalized().x) < 0.9 else Vector((0, 1, 0))
+        tangent = fallback.cross(axis)
+    tangent = tangent.normalized()*radius
+    points = [center + axis*math.cos(math.tau*i/segments) + tangent*math.sin(math.tau*i/segments)
+              for i in range(segments)]
+    points.append(points[0].copy())
+    return points
+
+
+class PaletteGradientEdit:
+    """Transient handles owned by the existing painting operator."""
+
+    def __init__(self, painter, selection, record, building=False):
+        self.painter = painter
+        self.obj, self.bm, self.uv, self.loops = selection
+        self.area, self.region, self.rv3d = painter.area, painter.region, painter.rv3d
+        self.record = json.loads(json.dumps(record))
+        self.building = building
+        self.drag = None
+        self.hover = None
+        self.dirty = False
+        self.snapshot = None
+        self.projection_cache = None
+        self.projection_key = None
+        if self.record['kind'] == 'CIRCLE' and len(self.record.get('nodes', [])) == 2:
+            # Older circles had one radius; recover the perpendicular axis from the saved path.
+            point = self.record['path'][(len(self.record['path'])-1)//4]
+            self.record['nodes'].append([point[:], point[:], point[:]])
+        if not building and not self.record.get('nodes'):
+            path = [Vector(p) for p in self.record['path']]
+            if self.record['kind'] == 'STRAIGHT':
+                anchors = [path[0], path[-1]]
+            else:
+                # Preserve the saved stroke until the user moves a control.
+                count = min(12, len(path))
+                anchors = [path[round(i*(len(path)-1)/(count-1))] for i in range(count)]
+                self.record['kind'] = 'BEZIER'
+            self.record['nodes'] = bezier_nodes(anchors)
+
+    def control_center(self):
+        if self.record['kind'] == 'CIRCLE':
+            return Vector(self.record['nodes'][0][1])
+        points = [Vector(p) for p in self.record['path']]
+        return sum(points, Vector()) / max(1, len(points))
+
+    def move_handle_screen(self):
+        if self.building:
+            return None
+        return view3d_utils.location_3d_to_region_2d(
+            self.region, self.rv3d, self.obj.matrix_world @ self.control_center())
+
+    def transform_whole_path(self, mouse, rotate=False):
+        matrix, inverse = self.obj.matrix_world, self.obj.matrix_world.inverted_safe()
+        center = matrix @ self.transform_center
+        if rotate:
+            screen_center = view3d_utils.location_3d_to_region_2d(self.region, self.rv3d, center)
+            if screen_center is None:
+                return
+            start, current = self.transform_mouse-screen_center, mouse-screen_center
+            if start.length < 1e-6 or current.length < 1e-6:
+                return
+            angle = math.atan2(current.y, current.x)-math.atan2(start.y, start.x)
+            rotation = Quaternion(self.rv3d.view_rotation @ Vector((0, 0, 1)), angle)
+            def transform(p):
+                return inverse @ (center + rotation @ (matrix @ Vector(p)-center))
+            self.painter.gradient_snap_target = None
+        else:
+            world = view3d_utils.region_2d_to_location_3d(self.region, self.rv3d, mouse, center)
+            initial = view3d_utils.region_2d_to_location_3d(self.region, self.rv3d, self.transform_mouse, center)
+            target = inverse @ (center+world-initial)
+            target = gradient_snap_point(self.painter, mouse, target)
+            delta = target-self.transform_center
+            def transform(p):
+                return Vector(p)+delta
+        self.record['nodes'] = [[list(transform(p)) for p in node] for node in self.snapshot['nodes']]
+        # Transform the saved polyline directly; moving a freehand stroke must
+        # not silently replace its shape with the editable Bezier approximation.
+        self.update_uvs(path_override=[transform(p) for p in self.snapshot['path']])
+
+    def rotation_handle_screen(self):
+        if self.building:
+            return None
+        center = self.control_center()
+        if self.record['kind'] == 'CIRCLE':
+            nodes = self.record['nodes']
+            phase = self.record.get('circle_phase', 0.0)
+            start = center + (Vector(nodes[1][1])-center)*math.cos(phase) + (Vector(nodes[2][1])-center)*math.sin(phase)
+        else:
+            start = Vector(self.record['path'][-1])
+            if (start-center).length < 1e-6:
+                start = max((Vector(p) for p in self.record['path']), key=lambda p: (p-center).length)
+        def project(p):
+            return view3d_utils.location_3d_to_region_2d(self.region, self.rv3d, self.obj.matrix_world @ p)
+        c, rim = project(center), project(start)
+        if c is None or rim is None or (rim-c).length < 1e-6:
+            return None
+        return rim, rim+(rim-c).normalized()*26.0
+
+    def rotate_gradient(self, mouse):
+        nodes = self.record['nodes']
+        center = Vector(nodes[0][1])
+        a, b = Vector(nodes[1][1])-center, Vector(nodes[2][1])-center
+        matrix = self.obj.matrix_world
+        world_center = matrix @ center
+        normal = (matrix.to_3x3() @ a).cross(matrix.to_3x3() @ b)
+        if normal.length <= 1e-10:
+            return
+        normal.normalize()
+        origin = view3d_utils.region_2d_to_origin_3d(self.region, self.rv3d, mouse)
+        ray = view3d_utils.region_2d_to_vector_3d(self.region, self.rv3d, mouse)
+        denominator = ray.dot(normal)
+        if abs(denominator) < 1e-8:
+            return
+        world = origin + ray*((world_center-origin).dot(normal)/denominator)
+        point = matrix.inverted_safe() @ world
+        point = gradient_snap_point(self.painter, mouse, point)
+        phase = ellipse_point_phase(a, b, point-center)
+        if phase is not None:
+            self.record['circle_phase'] = phase
+            self.update_uvs()
+
+    def begin_drag(self, index, handle, mouse):
+        self.painter.gradient_snap_cache = None
+        self.painter.gradient_snap_target = None
+        self.bm = bmesh.from_edit_mesh(self.obj.data)
+        self.uv = self.bm.loops.layers.uv.get(self.uv.name)
+        self.projection_cache = None
+        self.projection_key = None
+        self.painter.last_action_mode = 'PATH'
+        self.snapshot = json.loads(json.dumps(self.record))
+        self.transform_center = self.control_center()
+        self.transform_mouse = mouse.copy()
+        self.loops = [(loop, loop[self.uv].uv.copy()) for loop, _ in self.loops]
+        self.drag = (index, handle)
+
+    def update_uvs(self, path_override=None):
+        nodes = self.record['nodes']
+        if path_override is not None:
+            path = path_override
+        elif self.record['kind'] == 'CIRCLE':
+            if self.building:
+                matrix = self.obj.matrix_world
+                inverse = matrix.inverted_safe()
+                normal = inverse.to_3x3().transposed() @ Vector(self.record['circle_normal'])
+                path = [inverse @ p for p in circle_path(
+                    matrix @ Vector(nodes[0][1]), matrix @ Vector(nodes[1][1]), normal)]
+                axis = list(path[(len(path)-1)//4])
+                nodes[2] = [axis[:], axis[:], axis[:]]
+            else:
+                path = ellipse_path(Vector(nodes[0][1]), Vector(nodes[1][1]), Vector(nodes[2][1]),
+                                    phase=self.record.get('circle_phase', 0.0))
+        else:
+            path = bezier_path(nodes) if self.record['kind'] == 'BEZIER' else [Vector(n[1]) for n in nodes]
+        self.record['path'] = [list(p) for p in path]
+        screen = [view3d_utils.location_3d_to_region_2d(self.region, self.rv3d, self.obj.matrix_world @ p) for p in path]
+        if len(screen) >= 2 and all(p is not None for p in screen):
+            projection_key = (self.region.width, self.region.height,
+                              tuple(v for row in self.rv3d.perspective_matrix for v in row),
+                              tuple(v for row in self.obj.matrix_world for v in row))
+            if self.projection_cache is None or projection_key != self.projection_key:
+                self.projection_cache = gradient_projected_vertices(
+                    self.loops, self.obj, self.region, self.rv3d)
+                self.projection_key = projection_key
+            apply_path_gradient_screen_uvs(self.loops, self.obj, self.uv, screen, self.region, self.rv3d,
+                                           *self.record['bounds'], self.record['direction'],
+                                           projected=self.projection_cache,
+                                           closed=self.record['kind'] == 'CIRCLE')
+            bmesh.update_edit_mesh(self.obj.data, loop_triangles=False, destructive=False)
+            self.obj.data.update()
+            self.dirty = True
+        self.area.tag_redraw()
+        self.painter.uv_area.tag_redraw()
+
+    def finish(self, cancel=False):
+        if self.obj.mode == 'EDIT' and self.bm.is_valid:
+            if cancel:
+                for loop, uv in self.loops:
+                    if loop.is_valid:
+                        loop[self.uv].uv = uv
+                bmesh.update_edit_mesh(self.obj.data, loop_triangles=False, destructive=False)
+                self.obj.data.update()
+                if self.snapshot is not None:
+                    self.record = self.snapshot
+            elif self.dirty:
+                save_gradient_record(self.obj, self.uv, self.loops, self.record)
+                # Do not let cavity auto-preview overwrite a handle edit.
+                self.painter.last_action_mode = 'PATH'
+                self.painter.last_applied_selection_signature = None
+        self.drag = None
+        self.painter.gradient_snap_target = None
+        self.dirty = False
+        self.snapshot = None
+        redraw_all_areas(bpy.context)
+
+    def move_drag_to(self, mouse):
+        self.last_drag_mouse = mouse.copy()
+        nodes = self.record['nodes']
+        i, handle = self.drag
+        if i == -2:
+            self.transform_whole_path(mouse)
+            return
+        if i == -1:
+            if self.record['kind'] == 'CIRCLE':
+                self.rotate_gradient(mouse)
+            else:
+                self.transform_whole_path(mouse, rotate=True)
+            return
+        old = Vector(nodes[i][handle])
+        world = self.obj.matrix_world @ old
+        new = self.obj.matrix_world.inverted_safe() @ view3d_utils.region_2d_to_location_3d(self.region, self.rv3d, mouse, world)
+        new = gradient_snap_point(self.painter, mouse, new)
+        if handle == 1:
+            if self.record['kind'] == 'CIRCLE' and i == 0:
+                for axis in range(1, len(nodes)):
+                    nodes[axis] = [list(Vector(p)+new-old) for p in nodes[axis]]
+            nodes[i] = [list(Vector(p)+new-old) for p in nodes[i]]
+        else:
+            nodes[i][handle] = list(new)
+            if self.building:
+                nodes[i][0] = list(2*Vector(nodes[i][1])-new)
+        self.update_uvs()
+
+    def event(self, context, event):
+        if self.record['kind'] == 'CIRCLE' and event.type == 'TAB':
+            self.painter.draw_modifier_held = event.value != 'RELEASE'
+            return True
+        if self.building and self.record['kind'] != 'CIRCLE' and event.type == 'TAB' and event.value == 'RELEASE':
+            self.finish(cancel=len(self.record['nodes']) < 2)
+            self.building = False
+            self.painter.draw_modifier_held = False
+            self.painter.sync_gradient_editor(context, force=True)
+            return True
+        if event.type in {'ESC', 'RIGHTMOUSE', 'WINDOW_DEACTIVATE'} and (self.drag is not None or self.building):
+            self.finish(cancel=True)
+            self.building = False
+            self.painter.draw_modifier_held = False
+            self.painter.sync_gradient_editor(context, force=True)
+            return True
+        mouse = Vector((event.mouse_x-self.region.x, event.mouse_y-self.region.y))
+        nodes = self.record['nodes']
+        if self.drag is not None:
+            if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
+                last_mouse = getattr(self, 'last_drag_mouse', None)
+                if last_mouse is not None and (mouse-last_mouse).length > 0.001:
+                    self.move_drag_to(mouse)
+                if self.building and self.record['kind'] == 'CIRCLE':
+                    self.finish(cancel=len(self.record['path']) < 2)
+                    self.building = False
+                    self.painter.sync_gradient_editor(context, force=True)
+                elif self.building:
+                    self.drag = None
+                else:
+                    self.finish()
+                return True
+            if event.type == 'MOUSEMOVE':
+                self.move_drag_to(mouse)
+            # Keep selection/topology edits out of an in-progress drag.
+            return True
+        if self.building and event.type == 'MOUSEMOVE':
+            area, region, _rv3d = view3d_under_mouse(context, event)
+            if area == self.area and region == self.region and not mouse_over_ui_region(context, event):
+                gradient_snap_point(self.painter, mouse, None)
+            else:
+                self.painter.gradient_snap_target = None
+            self.area.tag_redraw()
+            return True
+        if event.type != 'LEFTMOUSE' or event.value != 'PRESS':
+            return self.building and event.type not in {'MIDDLEMOUSE', 'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'TIMER'}
+        area, region, rv3d = view3d_under_mouse(context, event)
+        if area != self.area or region != self.region:
+            return self.building
+        if self.building:
+            point = gradient_local_path(self.obj, self.loops, [mouse], self.region, self.rv3d)[0]
+            point = list(gradient_snap_point(self.painter, mouse, Vector(point)))
+            self.last_drag_mouse = mouse.copy()
+            if self.record['kind'] == 'CIRCLE':
+                nodes.extend([[point[:], point[:], point[:]] for _ in range(3)])
+                normal = self.rv3d.view_rotation @ Vector((0, 0, 1))
+                self.record['circle_normal'] = list(self.obj.matrix_world.to_3x3().transposed() @ normal)
+                self.drag = (1, 1)
+                self.update_uvs()
+                return True
+            if nodes:
+                delta = (Vector(point)-Vector(nodes[-1][1]))/3
+                if Vector(nodes[-1][2]) == Vector(nodes[-1][1]):
+                    nodes[-1][2] = list(Vector(nodes[-1][1])+delta)
+                nodes.append([list(Vector(point)-delta), point, list(Vector(point)+delta)])
+            else:
+                nodes.append([point[:], point[:], point[:]])
+            self.drag = (len(nodes)-1, 2)
+            self.update_uvs()
+            return True
+        control = self.hit_control(context, event)
+        self.set_hover(control)
+        if control is not None:
+            self.begin_drag(*control, mouse=mouse)
+            self.last_drag_mouse = mouse.copy()
+            return True
+        return False
+
+    def set_hover(self, control):
+        if self.hover != control:
+            self.hover = control
+            self.area.tag_redraw()
+
+    def hit_control(self, context, event):
+        # Drawing modifiers and selection modifiers always keep their normal meaning.
+        if (self.painter.draw_modifier_held or event.shift or event.ctrl or event.alt or event.oskey
+                or not context.scene.snap_uv_show_gradients or mouse_over_ui_region(context, event)):
+            return None
+        area, region, _rv3d = view3d_under_mouse(context, event)
+        if area != self.area or region != self.region:
+            return None
+        mouse = Vector((event.mouse_x-self.region.x, event.mouse_y-self.region.y))
+        candidates = []
+        for i, node in enumerate(self.record['nodes']):
+            for h in ((1, 0, 2) if self.record['kind'] == 'BEZIER' else (1,)):
+                p = view3d_utils.location_3d_to_region_2d(self.region, self.rv3d, self.obj.matrix_world @ Vector(node[h]))
+                if p is not None and (p-mouse).length <= 10:
+                    candidates.append(((p-mouse).length, h != 1, i, h))
+        move_control = self.move_handle_screen()
+        if move_control is not None and (move_control-mouse).length <= 10:
+            candidates.append(((move_control-mouse).length, False, -2, 0))
+        rotation = self.rotation_handle_screen()
+        if rotation is not None and (rotation[1]-mouse).length <= 10:
+            candidates.append(((rotation[1]-mouse).length, False, -1, 0))
+        if candidates:
+            _, _, i, h = min(candidates)
+            return i, h
+        return None
 
 
 class UV_OT_clear_path_gradient(bpy.types.Operator):
@@ -2592,6 +3698,7 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
                     self.report({'ERROR'}, "Could not calculate cavity values")
                     return {'CANCELLED'}
                 bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+                forget_gradient_records(obj, uv_layer, loops_data)
                 self.report({'INFO'}, f"Cavity gradient mapped to cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
                 return {'FINISHED'}
 
@@ -2609,6 +3716,7 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
                     target_min_u, target_min_v, effective_cell_width_uv, effective_cell_height_uv,
                     scene.snap_uv_gradient_direction)
                 bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+                forget_gradient_records(obj, uv_layer, loops_data)
                 self.report({'INFO'}, f"Radial gradient mapped to cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
                 return {'FINISHED'}
 
@@ -2641,8 +3749,39 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
                                             path_width_uv, path_height_uv,
                                             scene.snap_uv_gradient_direction)
                 bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+                bm.faces.index_update()
+                bm.verts.index_update()
+                local_path = (gradient_local_path(obj, loops_data, screen_points, view_region, rv3d)
+                              if len(screen_points) >= 2 else
+                              [list(obj.matrix_world.inverted_safe() @ point) for point in path_points])
+                save_gradient_record(obj, uv_layer, loops_data, {
+                    'kind': scene.snap_uv_path_style,
+                    'path': local_path,
+                    'bounds': [path_min_u, path_min_v, path_width_uv, path_height_uv],
+                    'direction': scene.snap_uv_gradient_direction,
+                    'colors': scene.snap_uv_path_colors,
+                })
                 self.report({'INFO'}, f"Path gradient mapped to cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
                 return {'FINISHED'}
+
+            if not projected_from_view:
+                bm.faces.index_update()
+                bm.verts.index_update()
+                selected = selected_loop_data(bm, uv_layer, context.tool_settings)
+                record = matching_gradient(obj, uv_layer, selected) if selected else None
+                if record is not None:
+                    bounds = safe_gradient_bounds(
+                        target_min_u, target_min_v, effective_cell_width_uv, effective_cell_height_uv,
+                        margin_x_uv, margin_y_uv, tex_width, tex_height)
+                    colors = sample_palette_gradient(
+                        getattr(self.uv_space, 'image', None), target_cell_x, target_cell_y_top,
+                        cell_width_px, cell_height_px, scene.snap_uv_gradient_direction)
+                    if remap_saved_gradient(obj, uv_layer, selected, record, bounds,
+                                            scene.snap_uv_gradient_direction, serialize_gradient_colors(colors)):
+                        bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+                        obj.data.update()
+                        redraw_all_areas(context)
+                        return {'FINISHED'}
 
             # Determine effective option values.
             preserve_value = (
@@ -2673,6 +3812,8 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
                     margin_x_uv, margin_y_uv, preserve_value)
 
             bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+            forget_gradient_records(obj, uv_layer,
+                                    [(loop, loop[uv_layer].uv.copy()) for group in loop_groups for loop in group])
             if projected_from_view:
                 self.report({'INFO'}, f"Projected from view and moved to cell (x={target_cell_x}, y_from_top={target_cell_y_top})")
             else:
@@ -2717,25 +3858,41 @@ class UV_PT_snap_to_grid_panel(bpy.types.Panel):
         layout.separator()
         layout.label(text="Painting:")
         layout.prop(scene, "snap_uv_path_style")
+        layout.prop(scene, "snap_uv_show_gradients")
+        layout.prop(scene, "snap_uv_gradient_snap", text="Snap Gradient Points (F8)")
         layout.prop(scene, "snap_uv_path_stabilizer")
         layout.prop(scene, "snap_uv_gradient_direction")
         layout.separator()
-        layout.label(text="Cavity / Fake AO:")
-        layout.prop(scene, "snap_uv_cavity_strength")
-        layout.prop(scene, "snap_uv_edge_strength")
-        layout.prop(scene, "snap_uv_edge_threshold")
-        layout.prop(scene, "snap_uv_edge_falloff")
-        layout.prop(scene, "snap_uv_cavity_smooth")
-        layout.prop(scene, "snap_uv_cavity_contrast")
-        layout.prop(scene, "snap_uv_cavity_bias")
-        layout.prop(scene, "snap_uv_cavity_invert")
-        layout.prop(scene, "snap_uv_cavity_auto_preview")
+        box = layout.box()
+        box.prop(scene, "snap_uv_cavity_expanded", text="Cavity / Fake AO",
+                 icon='TRIA_DOWN' if scene.snap_uv_cavity_expanded else 'TRIA_RIGHT',
+                 emboss=False)
+        if scene.snap_uv_cavity_expanded:
+            box.prop(scene, "snap_uv_cavity_strength")
+            box.prop(scene, "snap_uv_edge_strength")
+            box.prop(scene, "snap_uv_edge_threshold")
+            box.prop(scene, "snap_uv_edge_falloff")
+            box.prop(scene, "snap_uv_cavity_smooth")
+            box.prop(scene, "snap_uv_cavity_contrast")
+            box.prop(scene, "snap_uv_cavity_bias")
+            box.prop(scene, "snap_uv_cavity_invert")
+            box.prop(scene, "snap_uv_cavity_auto_preview")
         if scene.snap_uv_painting_active:
             layout.label(text="Alt/Option + cell: Project from View")
             layout.label(text="Shift + Ctrl/Cmd + cell: Select UVs")
             layout.label(text="LMB drag in UV: Box Select")
             layout.label(text="Shift/Ctrl + drag: Add/Subtract")
-            layout.label(text="Tab + LMB: draw path")
+            if scene.snap_uv_path_style == 'CIRCLE':
+                layout.label(text="Tab + drag: circle center / radius")
+                layout.label(text="Drag axis handles: ellipse")
+            elif scene.snap_uv_path_style == 'BEZIER':
+                layout.label(text="Hold Tab: click/drag curve points")
+                layout.label(text="Release Tab: finish curve")
+            else:
+                layout.label(text="Tab + LMB: draw path")
+            if scene.snap_uv_show_gradients:
+                layout.label(text="Cyan: move / Purple: rotate")
+                layout.label(text="White points: edit shape")
             layout.label(text="Tab + Shift + LMB: distance source")
             layout.label(text="Shift + cell: radial")
             layout.label(text="Ctrl/Cmd + cell: cavity")
@@ -2748,6 +3905,7 @@ class UV_PT_snap_to_grid_panel(bpy.types.Panel):
             row = layout.row()
             row.enabled = edit_mesh is not None and edit_mesh.type == 'MESH'
             row.operator("uv.draw_path_gradient", text="Start Painting")
+
 
 # --- Registration ---
 

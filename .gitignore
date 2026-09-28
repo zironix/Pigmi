@@ -101,3 +101,7 @@ out/
 /Pigmi/
 /pigmi_with_codex.zip
 /pigmi-private-history.bundle
+
+# Python runtime cache
+__pycache__/
+*.py[cod]
