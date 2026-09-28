@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Pigmi: UV to Palette",
     "author": "Oleg Pavlov",
-    "version": (1, 14, 0),
+    "version": (1, 16, 7),
     "blender": (5, 0, 0),
     "location": "3D View > Sidebar > Snap UV",
     "description": (
@@ -17,6 +17,7 @@ import time
 import json
 import numpy as np
 from array import array
+from types import SimpleNamespace
 from mathutils import Vector, Quaternion
 from mathutils.bvhtree import BVHTree
 from bpy_extras import view3d_utils
@@ -24,12 +25,14 @@ from bpy_extras import view3d_utils
 # --- Helper functions ---
 
 path_gradient_draw_handle = None
+easy_selection_draw_handle = None
 uv_box_draw_handle = None
 uv_box_preview_area = None
 uv_box_preview_points = None
 
 
 def draw_uv_box_selection_overlay():
+    draw_active_palette_cell()
     if uv_box_preview_points is None or bpy.context.area != uv_box_preview_area:
         return
 
@@ -326,14 +329,20 @@ def draw_path_gradient_joins(batch_for_shader, points, radius):
 
 
 def ensure_path_gradient_overlay():
-    global path_gradient_draw_handle
+    global path_gradient_draw_handle, easy_selection_draw_handle
+    if easy_selection_draw_handle is None:
+        easy_selection_draw_handle = bpy.types.SpaceView3D.draw_handler_add(
+            draw_easy_selection_overlay, (), 'WINDOW', 'POST_VIEW')
     if path_gradient_draw_handle is None:
         path_gradient_draw_handle = bpy.types.SpaceView3D.draw_handler_add(
             draw_palette_overlays, (), 'WINDOW', 'POST_PIXEL')
 
 
 def remove_path_gradient_overlay():
-    global path_gradient_draw_handle
+    global path_gradient_draw_handle, easy_selection_draw_handle
+    if easy_selection_draw_handle is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(easy_selection_draw_handle, 'WINDOW')
+        easy_selection_draw_handle = None
     if path_gradient_draw_handle is not None:
         bpy.types.SpaceView3D.draw_handler_remove(path_gradient_draw_handle, 'WINDOW')
         path_gradient_draw_handle = None
@@ -1385,9 +1394,25 @@ def init_properties():
     sc.snap_uv_path_colors = bpy.props.StringProperty(
         name="Path Colors", default="",
         description="Internal sampled colors for the path gradient preview.")
+    sc.snap_uv_controls_expanded = bpy.props.BoolProperty(
+        name="Controls", default=False,
+        description="Show painting shortcuts and interaction hints")
     sc.snap_uv_cavity_expanded = bpy.props.BoolProperty(
         name="Cavity / Fake AO", default=False,
         description="Show cavity and fake ambient occlusion settings")
+    sc.snap_uv_easy_mode = bpy.props.BoolProperty(
+        name="Easy Mode", default=False,
+        description="Click a seam-delimited piece to project or move it to the active cell. Draw gradients to automatically pick whole pieces")
+    sc.snap_uv_easy_variant = bpy.props.EnumProperty(
+        name="Workflow", default='AUTO',
+        items=[('AUTO', "Automatic", "Click to paint; gradients automatically target pieces"),
+               ('SELECT', "Select Then Paint", "Brush-select pieces; Enter/Space paints the active cell, Tab+LMB draws a gradient on the set")])
+    sc.snap_uv_easy_drag_gradient = bpy.props.BoolProperty(
+        name="Drag to Draw Gradient", default=False,
+        description="Click to paint, drag to draw a gradient. In Select Then Paint, confirm the selection first. Click applies on release")
+    sc.snap_uv_easy_through = bpy.props.BoolProperty(
+        name="Include Occluded Pieces", default=False,
+        description="Also paint separate pieces behind the front surface under a gradient. Hidden geometry is always excluded")
     sc.snap_uv_gradient_snap = bpy.props.BoolProperty(
         name="Snap Gradient Points", default=False,
         description="Snap gradient controls to mesh vertices, edge midpoints and face centers within 14 pixels. F8 toggles while painting")
@@ -1495,14 +1520,14 @@ def clear_properties():
         "snap_uv_preserve", "snap_uv_independent",
         "snap_uv_path_points", "snap_uv_path_screen_points",
         "snap_uv_path_debug", "snap_uv_path_colors",
-        "snap_uv_path_style", "snap_uv_gradient_direction", "snap_uv_show_gradients", "snap_uv_gradient_snap",
+        "snap_uv_path_style", "snap_uv_gradient_direction", "snap_uv_show_gradients", "snap_uv_gradient_snap", "snap_uv_easy_mode", "snap_uv_easy_through", "snap_uv_easy_variant", "snap_uv_easy_drag_gradient",
         "snap_uv_path_stabilizer", "snap_uv_cavity_strength",
         "snap_uv_edge_strength", "snap_uv_edge_threshold",
         "snap_uv_edge_falloff", "snap_uv_cavity_smooth",
         "snap_uv_cavity_contrast", "snap_uv_cavity_bias",
         "snap_uv_cavity_invert", "snap_uv_cavity_auto_preview",
         "snap_uv_last_cell_x", "snap_uv_last_cell_y_top",
-        "snap_uv_painting_active", "snap_uv_cavity_expanded",
+        "snap_uv_painting_active", "snap_uv_cavity_expanded", "snap_uv_controls_expanded",
     )
     for property_name in property_names:
         if hasattr(sc, property_name):
@@ -1555,6 +1580,11 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         self.last_gradient_sync = 0.0
         self.paint_undo = []
         self.paint_redo = []
+        self.easy_stroke = None
+        self.easy_click_pending = None
+        self.easy_gradient_drag = False
+        self.easy_selection = None
+        self.paint_batch = None
         if not context.tool_settings.use_uv_select_sync:
             self.report({'ERROR'}, "UV Sync Selection must be enabled in the UV Editor")
             return {'CANCELLED'}
@@ -1671,6 +1701,13 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
 
     def finish_painting(self, context, restore_previous=False):
         global active_gradient_painter
+        self.easy_click_pending = None
+        self.easy_gradient_drag = False
+        self.end_easy_stroke(cancel=True)
+        if self.easy_selection is not None:
+            if not self.easy_selection.confirmed:
+                self.easy_selection.restore()
+            self.easy_selection = None
         if self.gradient_editor is not None:
             if self.gradient_editor.drag is not None or self.gradient_editor.building:
                 self.gradient_editor.finish(cancel=True)
@@ -1833,6 +1870,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         scene.snap_uv_path_colors = serialize_gradient_colors(colors)
         self.target_ready = True
         self.state = 'DRAW_PATH'
+        self.uv_area.tag_redraw()
         return True
 
     def refresh_live_settings(self, context):
@@ -1971,8 +2009,10 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         uv_layer = bm.loops.layers.uv.active
         if uv_layer is None:
             uv_layer = bm.loops.layers.uv.verify()
-        loops_data = selected_face_loop_data(bm, uv_layer, context.tool_settings)
+        loops_data = (self.easy_stroke.resolve(self.screen_points) if self.easy_stroke is not None
+                      else selected_face_loop_data(bm, uv_layer, context.tool_settings))
         if not loops_data:
+            self.end_easy_stroke(cancel=True)
             self.clear_current_path(context)
             self.report({'ERROR'}, "No UVs selected")
             return False
@@ -2010,6 +2050,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             'direction': self.gradient_direction,
             'colors': context.scene.snap_uv_path_colors,
         })
+        self.end_easy_stroke()
         self.sync_gradient_editor(context, force=True)
         redraw_all_areas(context)
         return True
@@ -2159,8 +2200,12 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         if select_cell:
             return self.select_current_cell_uvs(context)
         if project_from_view:
-            return self.apply_selected_to_current_cell(
+            applied = self.apply_selected_to_current_cell(
                 context, project_from_view=True)
+            if applied:
+                self.sync_gradient_editor(context, force=True)
+                redraw_all_areas(context)
+            return applied
         if cavity:
             return self.apply_cavity_gradient(context)
         if radial:
@@ -2297,10 +2342,14 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         self.last_applied_settings_signature = current_settings_signature
         self.last_action_mode = 'PROJECT_FROM_VIEW' if project_from_view else 'FIT'
         if project_from_view:
-            self.report({'INFO'}, "Projected from view and moved to palette cell")
+            self.report({'INFO'}, "Projected from view into cell; gradient removed from selection")
         return True
 
     def sync_gradient_editor(self, context, force=False):
+        if self.easy_selection is not None and not self.easy_selection.confirmed:
+            self.gradient_editor = None
+            self.gradient_signature = None
+            return
         editor = self.gradient_editor
         if editor is not None and (editor.drag is not None or editor.building):
             return
@@ -2359,6 +2408,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.sync_gradient_editor(context, force=True)
             return
         if self.drawing:
+            self.end_easy_stroke(cancel=True)
             self.drawing = False
             self.points, self.screen_points = [], []
             self.last_screen_point = None
@@ -2412,11 +2462,400 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         self.sync_gradient_editor(context, force=True)
         redraw_all_areas(context)
 
+    def begin_easy_stroke(self, context):
+        self.end_easy_stroke(cancel=True)
+        if context.scene.snap_uv_easy_mode:
+            if context.scene.snap_uv_easy_variant == 'AUTO':
+                self.easy_stroke = EasyStroke(self)
+            elif self.easy_selection is not None and self.easy_selection.confirmed:
+                stage = self.easy_selection
+                stage.apply()
+                fixed_faces = {face for group in stage.groups for face in stage.picker.components[group]}
+                self.easy_stroke = EasyStroke(self, fixed_faces=fixed_faces)
+
+    def end_easy_stroke(self, cancel=False):
+        if self.easy_stroke is not None:
+            if cancel:
+                self.easy_stroke.restore(selection=True)
+            self.easy_stroke = None
+
+    def preview_easy_path(self, context):
+        stroke = self.easy_stroke
+        if stroke is None or len(self.screen_points) < 2:
+            return
+        now = time.perf_counter()
+        if now-stroke.last_preview < 0.08:
+            return
+        stroke.last_preview = now
+        loops = stroke.resolve(self.screen_points)
+        bounds = safe_gradient_bounds(
+            self.target_min_u, self.target_min_v, self.effective_cell_width_uv, self.effective_cell_height_uv,
+            self.margin_x_uv, self.margin_y_uv, context.scene.snap_uv_texture_width, context.scene.snap_uv_texture_height)
+        apply_path_gradient_screen_uvs(loops, self.obj, stroke.picker.uv, self.screen_points,
+                                       self.region, self.rv3d, *bounds, self.gradient_direction)
+        bmesh.update_edit_mesh(self.obj.data, loop_triangles=False, destructive=False)
+        self.obj.data.update()
+        redraw_all_areas(context)
+
+    def handle_staged_easy(self, context, event):
+        enabled = context.scene.snap_uv_easy_mode and context.scene.snap_uv_easy_variant == 'SELECT'
+        busy = self.drawing or (self.gradient_editor is not None
+                               and (self.gradient_editor.drag is not None or self.gradient_editor.building))
+        if busy:
+            return None
+        if not enabled:
+            if self.easy_selection is not None:
+                if not self.easy_selection.confirmed:
+                    self.easy_selection.restore()
+                self.easy_selection = None
+                redraw_all_areas(context)
+            return None
+        if self.easy_selection is None or not self.easy_selection.picker.bm.is_valid:
+            self.easy_selection = EasySelectionBrush(self)
+            self.last_action_mode = None
+        stage = self.easy_selection
+        if self.easy_click_pending is not None:
+            if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE', 'LEFTMOUSE'}:
+                return None
+            if event.type in {'BACK_SPACE', 'TAB', 'A', 'L', 'WINDOW_DEACTIVATE', 'RET', 'NUMPAD_ENTER', 'SPACE'}:
+                self.easy_click_pending = None
+        if stage.pending_native:
+            stage.pending_native = False
+            previous = set(stage.groups)
+            stage.groups = {stage.picker.component_for[face] for face in stage.picker.faces
+                            if face.is_valid and face.select}
+            stage.confirmed = False
+            stage.painted = False
+            stage.checkpoint(previous)
+            stage.apply()
+        if mouse_over_ui_region(context, event):
+            if event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and stage.dragging:
+                stage.dragging = False
+                stage.last_mouse = None
+                stage.checkpoint(stage.gesture_start)
+                return {'RUNNING_MODAL'}
+            if event.type == 'MOUSEMOVE':
+                stage.hover.clear()
+                stage.last_mouse = None
+                self.area.tag_redraw()
+            return None
+        if (event.type == 'LEFTMOUSE' and event.value == 'PRESS' and not self.draw_modifier_held
+                and not event.shift and not event.alt and not primary_modifier(event)):
+            area, region, rv3d = view3d_under_mouse(context, event)
+            if area is not None:
+                editor = self.gradient_editor
+                if editor is None or editor.hit_control(context, event) is None:
+                    self.area, self.region, self.rv3d = area, region, rv3d
+                    hit = stage.picker.hit(Vector((event.mouse_x-region.x, event.mouse_y-region.y)),
+                                           context.scene.snap_uv_easy_through)
+                    if not hit:
+                        stage.clear()
+                        return {'RUNNING_MODAL'}
+        if event.type in {'RET', 'NUMPAD_ENTER', 'SPACE'}:
+            if event.value == 'PRESS' and not getattr(event, 'is_repeat', False):
+                if not stage.groups:
+                    self.report({'INFO'}, 'Paint-select at least one piece first')
+                elif stage.confirmed:
+                    self.apply_staged_cell(context)
+                else:
+                    if stage.dragging:
+                        stage.checkpoint(stage.gesture_start)
+                    stage.dragging = False
+                    stage.confirmed = True
+                    stage.painted = False
+                    stage.hover.clear()
+                    stage.apply()
+                    self.apply_staged_cell(context)
+            return {'RUNNING_MODAL'}
+        if event.type == 'BACK_SPACE':
+            if event.value == 'PRESS':
+                stage.confirmed = False
+                stage.hover.clear()
+                stage.apply()
+            return {'RUNNING_MODAL'}
+        if event.type == 'A' and not primary_modifier(event):
+            if event.value == 'PRESS':
+                old = set(stage.groups)
+                stage.confirmed = False
+                stage.groups = set() if event.alt else set(range(len(stage.picker.components)))
+                stage.checkpoint(old)
+                stage.apply()
+            return {'RUNNING_MODAL'}
+        if stage.confirmed:
+            area, region, rv3d = view3d_under_mouse(context, event)
+            if event.type == 'MOUSEMOVE':
+                editor = self.gradient_editor
+                over_control = editor is not None and editor.hit_control(context, event) is not None
+                hover = (stage.picker.hit(Vector((event.mouse_x-region.x, event.mouse_y-region.y)),
+                                          context.scene.snap_uv_easy_through)
+                         if area is not None and not self.draw_modifier_held and not over_control else set())
+                if hover != stage.hover or stage.subtract != event.shift:
+                    stage.hover, stage.subtract = hover, event.shift
+                    self.area.tag_redraw()
+            if (event.type != 'LEFTMOUSE' or event.value != 'PRESS' or self.draw_modifier_held
+                    or area is None or event.alt or primary_modifier(event)):
+                return None
+            editor = self.gradient_editor
+            if editor is not None and editor.hit_control(context, event) is not None:
+                return None
+            if context.scene.snap_uv_easy_drag_gradient and not event.shift:
+                # A confirmed set stays fixed while click/drag chooses the paint action.
+                return None
+            # A mesh click starts selection again; gradient handles keep their priority.
+            stage.restart_fresh = stage.painted and not event.shift
+            stage.original_selection = [(elem, elem.select)
+                                        for seq in (stage.picker.bm.verts, stage.picker.bm.edges, stage.picker.bm.faces)
+                                        for elem in seq]
+            stage.confirmed = False
+            stage.painted = False
+            self.gradient_editor = None
+            self.gradient_signature = None
+            stage.overlay_key = None
+        if event.type == 'Z' and primary_modifier(event):
+            if event.value == 'PRESS':
+                if stage.dragging:
+                    stage.groups = set(stage.gesture_start)
+                    stage.dragging = False
+                else:
+                    source, target = (stage.redo, stage.undo) if event.shift else (stage.undo, stage.redo)
+                    if source:
+                        target.append(set(stage.groups))
+                        stage.groups = source.pop()
+                stage.apply()
+            return {'RUNNING_MODAL'}
+        if event.type == 'TAB':
+            if event.value == 'PRESS' and stage.groups:
+                if stage.dragging:
+                    stage.checkpoint(stage.gesture_start)
+                stage.dragging = False
+                stage.confirmed = True
+                stage.painted = False
+                stage.hover.clear()
+                stage.apply()
+                self.sync_gradient_editor(context, force=True)
+                # Continue to the normal Tab drawing shortcut, without applying a cell first.
+                return None
+            self.draw_modifier_held = False
+            if event.value == 'PRESS':
+                self.report({'INFO'}, 'Select at least one piece before drawing a gradient')
+            return {'RUNNING_MODAL'}
+        if event.type == 'WINDOW_DEACTIVATE':
+            if stage.dragging:
+                stage.checkpoint(stage.gesture_start)
+            stage.dragging = False
+            stage.last_mouse = None
+            stage.hover.clear()
+            self.area.tag_redraw()
+            return None
+        area, region, rv3d = view3d_under_mouse(context, event)
+        if event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and stage.dragging:
+            if area is not None:
+                stage.brush(Vector((event.mouse_x-region.x, event.mouse_y-region.y)), event.shift)
+            stage.dragging = False
+            stage.last_mouse = None
+            stage.checkpoint(stage.gesture_start)
+            return {'RUNNING_MODAL'}
+        if area is None:
+            if event.type == 'MOUSEMOVE':
+                stage.hover.clear()
+                stage.last_mouse = None
+                self.area.tag_redraw()
+            return None
+        self.area, self.region, self.rv3d = area, region, rv3d
+        mouse = Vector((event.mouse_x-region.x, event.mouse_y-region.y))
+        if event.type == 'LEFTMOUSE' and event.value == 'PRESS' and not event.alt and not primary_modifier(event):
+            stage.gesture_start = set(stage.groups)
+            if stage.restart_fresh:
+                stage.groups = set()
+                stage.restart_fresh = False
+                stage.apply()
+            stage.dragging = True
+            stage.last_mouse = None
+            stage.brush(mouse, event.shift)
+            return {'RUNNING_MODAL'}
+        if event.type == 'MOUSEMOVE':
+            if stage.dragging:
+                stage.brush(mouse, event.shift)
+            else:
+                hover = stage.picker.hit(mouse, context.scene.snap_uv_easy_through)
+                if hover != stage.hover or stage.subtract != event.shift:
+                    stage.hover, stage.subtract = hover, event.shift
+                    self.area.tag_redraw()
+            return {'RUNNING_MODAL'}
+        return None
+
+    def apply_staged_cell(self, context, radial=False, cavity=False,
+                          project_from_view=False, select_cell=False):
+        stage = self.easy_selection
+        if stage is None:
+            return
+        if select_cell:
+            if self.select_current_cell_uvs(context):
+                previous = set(stage.groups)
+                sync = context.tool_settings.use_uv_select_sync
+                stage.groups = {
+                    stage.picker.component_for[face] for face in stage.picker.faces
+                    if face.is_valid and face.select and
+                    (sync or any(loop[stage.picker.uv].select for loop in face.loops))}
+                stage.confirmed = stage.painted = stage.dragging = False
+                stage.hover.clear()
+                stage.checkpoint(previous)
+                stage.apply()
+            return
+        if not stage.groups:
+            return
+        if not stage.confirmed:
+            if stage.dragging:
+                stage.checkpoint(stage.gesture_start)
+            stage.dragging = False
+            stage.confirmed = True
+            stage.hover.clear()
+        self.paint_batch = []
+        try:
+            stage.apply()
+            if radial or cavity or project_from_view:
+                self.apply_current_cell_action(
+                    context, radial=radial, cavity=cavity,
+                    project_from_view=project_from_view)
+            else:
+                selection = gradient_selection(context)
+                if selection is not None and matching_gradient(selection[0], selection[2], selection[3]) is not None:
+                    # A single stroke across multiple pieces remains one editable stroke.
+                    self.apply_selected_to_current_cell(context)
+                else:
+                    for group in sorted(stage.groups):
+                        self.paint_easy_piece(context, stage.picker, {group})
+        finally:
+            step = merge_paint_steps(self.paint_batch)
+            self.paint_batch = None
+            if step is not None:
+                self.paint_undo.append(step)
+                del self.paint_undo[:-64]
+                self.paint_redo.clear()
+            stage.apply()
+            stage.painted = True
+            self.sync_gradient_editor(context, force=True)
+            redraw_all_areas(context)
+
+
+    def easy_click(self, context, event):
+        staged = context.scene.snap_uv_easy_variant == 'SELECT'
+        if (not context.scene.snap_uv_easy_mode
+                or (staged and (not context.scene.snap_uv_easy_drag_gradient
+                                or self.easy_selection is None or not self.easy_selection.confirmed))
+                or self.draw_modifier_held or self.drawing
+                or event.type != 'LEFTMOUSE' or event.value != 'PRESS'
+                or event.shift or primary_modifier(event) or event.alt or mouse_over_ui_region(context, event)):
+            return False
+        area, region, rv3d = view3d_under_mouse(context, event)
+        if area is None:
+            return False
+        self.area, self.region, self.rv3d = area, region, rv3d
+        picker = self.easy_selection.picker if staged else EasyMeshPicker(self)
+        groups = (set(self.easy_selection.groups) if staged else
+                  picker.hit(Vector((event.mouse_x-region.x, event.mouse_y-region.y))))
+        if context.scene.snap_uv_easy_drag_gradient:
+            # Keep the press position: delayed painting must not mutate the UVs
+            # which will become the gradient's undo baseline if this is a drag.
+            self.easy_click_pending = (SimpleNamespace(
+                type='LEFTMOUSE', value='PRESS', mouse_x=event.mouse_x, mouse_y=event.mouse_y,
+                shift=False, ctrl=False, alt=False, oskey=False), picker, groups)
+            return True
+        if not groups:
+            return False
+        self.paint_easy_piece(context, picker, groups)
+        return True
+
+    def handle_easy_click_drag(self, context, event):
+        pending = self.easy_click_pending
+        if pending is None:
+            return False
+        staged = context.scene.snap_uv_easy_variant == 'SELECT'
+        if (not context.scene.snap_uv_easy_mode or not context.scene.snap_uv_easy_drag_gradient
+                or (staged and (self.easy_selection is None or not self.easy_selection.confirmed))):
+            self.easy_click_pending = None
+            return False
+        release = event.type == 'LEFTMOUSE' and event.value == 'RELEASE'
+        if event.type not in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'} and not release:
+            return False
+        start, picker, groups = pending
+        distance_sq = (event.mouse_x-start.mouse_x)**2 + (event.mouse_y-start.mouse_y)**2
+        if distance_sq < 25:
+            if release:
+                self.easy_click_pending = None
+                if staged:
+                    self.apply_staged_cell(context)
+                elif groups:
+                    self.paint_easy_piece(context, picker, groups)
+            return True
+        self.easy_click_pending = None
+        if not self.refresh_live_settings(context):
+            return True
+        style = context.scene.snap_uv_path_style
+        if style in {'BEZIER', 'CIRCLE'}:
+            held = self.draw_modifier_held
+            self.draw_modifier_held = True
+            try:
+                self.handle_gradient_event(context, start)
+            finally:
+                self.draw_modifier_held = held
+            editor = self.gradient_editor
+            if editor is None or not editor.building:
+                return True
+            self.easy_gradient_drag = True
+            if style == 'BEZIER':
+                # A drag creates a two-point curve; Tab remains the multi-point tool.
+                editor.drag = None
+                endpoint = SimpleNamespace(**vars(start))
+                endpoint.mouse_x, endpoint.mouse_y = event.mouse_x, event.mouse_y
+                editor.event(context, endpoint)
+                editor.drag = (1, 1)
+            # Continue processing this movement/release through the existing editor.
+            return False
+        self.edit_bvh = None
+        self.drawing = True
+        self.points, self.screen_points = [], []
+        self.last_screen_point = None
+        self.begin_easy_stroke(context)
+        self.append_point(self.raycast_mesh(context, start), self.mouse_screen_point(context, start))
+        return False
+
+    def paint_easy_piece(self, context, picker, groups):
+        loops = picker.select(groups)
+        bmesh.update_edit_mesh(self.obj.data, loop_triangles=False, destructive=False)
+        self.gradient_editor = None
+        self.last_applied_selection_signature = None
+        if not self.refresh_live_settings(context):
+            return True
+        coords = [value for _loop, value in loops]
+        center = sum(coords, Vector((0,0)))/len(coords)
+        cw, ch = self.grid_cell_width_uv, self.grid_cell_height_uv
+        cx, cy = math.floor(center.x/cw), math.floor((1-center.y)/ch)
+        placed = (cx >= 0 and cy >= 0 and (cx+1)*cw <= 1+1e-6 and (cy+1)*ch <= 1+1e-6
+                  and all(cx*cw-1e-6 <= v.x <= (cx+1)*cw+1e-6
+                          and 1-(cy+1)*ch-1e-6 <= v.y <= 1-cy*ch+1e-6 for v in coords))
+        if placed:
+            self.last_applied_cell_min = Vector((cx*cw+self.margin_x_uv, 1-(cy+1)*ch+self.margin_y_uv))
+            self.last_applied_cell_size = Vector((self.effective_cell_width_uv, self.effective_cell_height_uv))
+            self.last_applied_selection_signature = loops_selection_signature(loops)
+            self.last_applied_settings_signature = self.fit_settings_signature(context)
+        self.apply_selected_to_current_cell(context, project_from_view=not placed)
+        self.sync_gradient_editor(context, force=True)
+        redraw_all_areas(context)
+        return True
+
     def handle_gradient_event(self, context, event):
         editor = self.gradient_editor
         # Finish only the in-progress handle gesture; the painting session stays active.
         if editor is not None and (editor.drag is not None or editor.building):
-            return editor.event(context, event)
+            handled = editor.event(context, event)
+            if self.easy_gradient_drag and event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
+                self.easy_gradient_drag = False
+                if editor.building:
+                    editor.finish(cancel=len(editor.record['nodes']) < 2)
+                    editor.building = False
+                    self.sync_gradient_editor(context, force=True)
+            return handled
         if (event.type == 'LEFTMOUSE' and event.value == 'PRESS'
                 and self.draw_modifier_held and not event.shift
                 and context.scene.snap_uv_path_style in {'BEZIER', 'CIRCLE'}):
@@ -2426,7 +2865,9 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.area, self.region, self.rv3d = area, region, rv3d
             if not self.refresh_live_settings(context):
                 return True
-            selection = gradient_selection(context)
+            self.begin_easy_stroke(context)
+            selection = (self.easy_stroke.selection_data([Vector((event.mouse_x-region.x, event.mouse_y-region.y))])
+                         if self.easy_stroke is not None else gradient_selection(context))
             if selection is None:
                 self.report({'WARNING'}, 'Select mesh faces with UVs first')
                 return True
@@ -2478,6 +2919,65 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         if context.edit_object != self.obj or self.obj.mode != 'EDIT':
             self.finish_painting(context)
             return {'CANCELLED'}
+        # Consume both press and release before editor/UI handlers can end Painting.
+        if context.scene.snap_uv_easy_mode and event.type in {'ESC', 'RIGHTMOUSE'}:
+            self.easy_click_pending = None
+            self.easy_gradient_drag = False
+            if event.value == 'PRESS':
+                editor = self.gradient_editor
+                if editor is not None and (editor.drag is not None or editor.building):
+                    editor.finish(cancel=True)
+                self.end_easy_stroke(cancel=True)
+                self.drawing = False
+                self.draw_modifier_held = False
+                self.points, self.screen_points = [], []
+                self.last_screen_point = None
+                self.clear_current_path(context)
+                self.uv_mouse_press = None
+                self.uv_mouse_dragging = False
+                self.swallow_uv_mouse_type = None
+                clear_uv_box_preview()
+                if self.easy_selection is not None and self.easy_selection.picker.bm.is_valid:
+                    self.easy_selection.clear()
+                else:
+                    bm = bmesh.from_edit_mesh(self.obj.data)
+                    for seq in (bm.faces, bm.edges, bm.verts):
+                        for elem in seq:
+                            elem.select = False
+                    bm.select_history.clear()
+                    bmesh.update_edit_mesh(self.obj.data, loop_triangles=False, destructive=False)
+                self.gradient_editor = None
+                self.gradient_signature = None
+                self.last_action_mode = None
+                self.last_applied_selection_signature = None
+                redraw_all_areas(context)
+            return {'RUNNING_MODAL'}
+        if event.type == 'L' and not mouse_over_ui_region(context, event):
+            self.easy_click_pending = None
+            if event.value == 'PRESS':
+                editor = self.gradient_editor
+                if editor is not None and (editor.drag is not None or editor.building):
+                    editor.finish(cancel=True)
+                if self.drawing:
+                    self.end_easy_stroke(cancel=True)
+                    self.drawing = False
+                    self.points, self.screen_points = [], []
+                    self.last_screen_point = None
+                    self.clear_current_path(context)
+                self.draw_modifier_held = False
+                self.gradient_editor = None
+                self.gradient_signature = None
+                if context.scene.snap_uv_easy_mode and context.scene.snap_uv_easy_variant == 'SELECT':
+                    if self.easy_selection is None:
+                        self.easy_selection = EasySelectionBrush(self)
+                    self.easy_selection.pending_native = True
+                    self.easy_selection.dragging = False
+                    self.easy_selection.last_mouse = None
+                self.last_gradient_sync = 0.0
+            return {'PASS_THROUGH'}
+        staged_result = self.handle_staged_easy(context, event)
+        if staged_result is not None:
+            return staged_result
         if event.type == 'Z' and primary_modifier(event) and not event.alt and not mouse_over_ui_region(context, event):
             if event.value == 'PRESS':
                 self.undo_paint_step(context, redo=event.shift)
@@ -2494,6 +2994,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         # Blender owns Select All / Deselect All (including customized A keymaps).
         # Handle this before a gradient gesture can consume keyboard input.
         if event.type == 'A':
+            self.easy_click_pending = None
             if event.value == 'PRESS' and not mouse_over_ui_region(context, event):
                 editor = self.gradient_editor
                 if editor is not None and (editor.drag is not None or editor.building):
@@ -2501,6 +3002,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                 self.gradient_editor = None
                 self.gradient_signature = None
                 if self.drawing:
+                    self.end_easy_stroke(cancel=True)
                     self.drawing = False
                     self.points = []
                     self.screen_points = []
@@ -2517,7 +3019,20 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                 self.area.tag_redraw()
             return {'PASS_THROUGH'}
 
+        if event.type in {'WINDOW_DEACTIVATE', 'TAB', 'A', 'L'}:
+            self.easy_click_pending = None
+        if event.type == 'WINDOW_DEACTIVATE':
+            self.easy_gradient_drag = False
+        if self.handle_easy_click_drag(context, event):
+            return {'RUNNING_MODAL'}
         if self.handle_gradient_event(context, event):
+            return {'RUNNING_MODAL'}
+        if self.easy_click(context, event):
+            return {'RUNNING_MODAL'}
+        if (self.easy_selection is not None and self.easy_selection.confirmed
+                and event.type == 'LEFTMOUSE' and not self.draw_modifier_held and not self.drawing
+                and view3d_under_mouse(context, event)[0] is not None
+                and not mouse_over_ui_region(context, event)):
             return {'RUNNING_MODAL'}
 
         if event.type in {'RIGHTMOUSE', 'ESC'}:
@@ -2543,6 +3058,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             return {'RUNNING_MODAL'}
 
         if event.type == 'WINDOW_DEACTIVATE':
+            self.end_easy_stroke(cancel=True)
             self.draw_modifier_held = False
             self.alt_modifier_held = False
             self.swallow_uv_mouse_type = None
@@ -2590,6 +3106,14 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                 return {'RUNNING_MODAL'}
 
             if self.pick_cell_from_event(context, event):
+                if self.easy_selection is not None:
+                    self.apply_staged_cell(
+                        context,
+                        radial=press["shift"] and not press["primary"] and not press["alt"],
+                        cavity=press["primary"] and not press["shift"] and not press["alt"],
+                        project_from_view=press["alt"],
+                        select_cell=press["shift"] and press["primary"] and not press["alt"])
+                    return {'RUNNING_MODAL'}
                 if len(self.screen_points) >= 2:
                     if self.apply_drawn_gradient(context):
                         self.clear_current_path(context)
@@ -2665,6 +3189,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                 self.points = []
                 self.screen_points = []
                 self.last_screen_point = None
+                self.begin_easy_stroke(context)
                 self.append_point(self.raycast_mesh(context, event), self.mouse_screen_point(context, event))
                 return {'RUNNING_MODAL'}
 
@@ -2718,6 +3243,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             self.points = []
             self.screen_points = []
             self.last_screen_point = None
+            self.begin_easy_stroke(context)
             self.append_point(self.raycast_mesh(context, event), self.mouse_screen_point(context, event))
             return {'RUNNING_MODAL'}
 
@@ -2734,6 +3260,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                     self.area.tag_redraw()
             else:
                 self.append_point(self.raycast_mesh(context, event), self.mouse_screen_point(context, event))
+            self.preview_easy_path(context)
             return {'RUNNING_MODAL'}
 
         if event.type == 'LEFTMOUSE' and event.value == 'RELEASE' and self.drawing:
@@ -2744,12 +3271,16 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             if len(self.screen_points) == 1:
                 self.append_point(self.raycast_mesh(context, event), self.mouse_screen_point(context, event))
             if len(self.screen_points) < 2:
+                self.end_easy_stroke(cancel=True)
                 context.scene.snap_uv_path_debug = (
                     f"events={self.events_seen}, attempts={self.raycast_attempts}, "
                     f"hits={self.raycast_hits}, screen_points={len(self.screen_points)}")
                 self.finish_drawing()
                 self.report({'ERROR'}, "Path needs at least two screen points. " + context.scene.snap_uv_path_debug)
-                return {'CANCELLED'}
+                self.clear_current_path(context)
+                self.points, self.screen_points = [], []
+                self.last_screen_point = None
+                return {'RUNNING_MODAL'}
             self.smooth_current_path(context)
             context.scene.snap_uv_path_points = serialize_path_points(self.points)
             context.scene.snap_uv_path_screen_points = serialize_screen_points(self.screen_points)
@@ -2766,6 +3297,7 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
                 self.last_screen_point = None
                 self.drawing = False
                 return {'RUNNING_MODAL'}
+            self.end_easy_stroke(cancel=True)
             self.clear_current_path(context)
             self.points = []
             self.screen_points = []
@@ -2778,6 +3310,360 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
             return {'PASS_THROUGH'}
 
         return {'RUNNING_MODAL'}
+
+
+# --- Easy Mode: seam-delimited pieces and reversible live targeting ---
+
+
+def draw_active_palette_cell():
+    painter = active_gradient_painter
+    context = bpy.context
+    if (painter is None or not context.scene.snap_uv_painting_active
+            or context.area != painter.uv_area or context.region.type != 'WINDOW'
+            or not painter.target_ready):
+        return
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    scene = context.scene
+    cw = scene.snap_uv_cell_width / scene.snap_uv_texture_width
+    ch = scene.snap_uv_cell_height / scene.snap_uv_texture_height
+    x, y = painter.target_cell_x*cw, 1-(painter.target_cell_y_top+1)*ch
+    view = context.region.view2d
+    corners = [Vector(view.view_to_region(u, v, clip=False))
+               for u, v in ((x,y),(x+cw,y),(x+cw,y+ch),(x,y+ch),(x,y))]
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+    gpu.state.blend_set('ALPHA')
+    try:
+        for width, color in ((6, (0,0,0,0.8)), (3, (1,0.7,0.12,1))):
+            batch = build_screen_polyline_batch(batch_for_shader, corners, width)
+            if batch:
+                shader.bind()
+                shader.uniform_float('color', color)
+                batch.draw(shader)
+    finally:
+        gpu.state.blend_set('NONE')
+
+
+class EasySelectionBrush:
+    """A fixed set of seam-delimited pieces, selected before painting."""
+
+    def __init__(self, painter):
+        self.painter = painter
+        self.picker = EasyMeshPicker(painter)
+        self.original_selection = [(e, e.select) for seq in (self.picker.bm.verts, self.picker.bm.edges, self.picker.bm.faces) for e in seq]
+        self.groups = set()
+        self.hover = set()
+        self.confirmed = False
+        self.painted = False
+        self.pending_native = False
+        self.restart_fresh = False
+        self.dragging = False
+        self.subtract = False
+        self.last_mouse = None
+        self.undo, self.redo = [], []
+        self.gesture_start = set()
+        self.overlay_key = None
+        self.overlay_batches = []
+        self.apply()
+
+    def apply(self):
+        self.picker.select(self.groups)
+        bmesh.update_edit_mesh(self.painter.obj.data, loop_triangles=False, destructive=False)
+        self.painter.gradient_editor = None
+        self.painter.gradient_signature = None
+        self.overlay_key = None
+        redraw_all_areas(bpy.context)
+
+    def restore(self):
+        if self.picker.bm.is_valid:
+            for elem, selected in self.original_selection:
+                if elem.is_valid:
+                    elem.select = selected
+            bmesh.update_edit_mesh(self.painter.obj.data, loop_triangles=False, destructive=False)
+
+    def clear(self):
+        previous = set(self.groups)
+        self.groups.clear()
+        self.hover.clear()
+        self.confirmed = False
+        self.painted = False
+        self.dragging = False
+        self.restart_fresh = False
+        self.pending_native = False
+        self.last_mouse = None
+        self.checkpoint(previous)
+        self.apply()
+        # An explicit reset must remain empty when Painting is subsequently stopped.
+        self.original_selection = [(elem, elem.select)
+                                   for seq in (self.picker.bm.verts, self.picker.bm.edges, self.picker.bm.faces)
+                                   for elem in seq]
+
+    def checkpoint(self, previous):
+        if previous != self.groups:
+            self.undo.append(set(previous))
+            del self.undo[:-64]
+            self.redo.clear()
+
+    def brush(self, mouse, subtract):
+        start = self.last_mouse if self.last_mouse is not None else mouse
+        count = max(1, int(math.ceil((mouse-start).length/6)))
+        touched = set()
+        for i in range(1, count+1):
+            touched.update(self.picker.hit(start.lerp(mouse, i/count), self.painter.scene.snap_uv_easy_through))
+        previous = set(self.groups)
+        self.groups = self.groups-touched if subtract else self.groups|touched
+        self.hover = self.picker.hit(mouse, self.painter.scene.snap_uv_easy_through)
+        self.subtract = subtract
+        self.last_mouse = mouse.copy()
+        if previous != self.groups:
+            self.apply()
+        self.painter.area.tag_redraw()
+
+
+def merge_paint_steps(steps):
+    if not steps:
+        return None
+    first, last = steps[0], steps[-1]
+    before, after = {}, {}
+    for step in steps:
+        for key, value in step['before'].items():
+            before.setdefault(key, value)
+        after.update(step['after'])
+    return dict(layer=first['layer'], topology=first['topology'], before=before, after=after,
+                records_before=first['records_before'], records_after=last['records_after'])
+
+
+def draw_easy_selection_overlay():
+    painter = active_gradient_painter
+    context = bpy.context
+    if (painter is None or not context.scene.snap_uv_painting_active
+            or not context.scene.snap_uv_easy_mode or context.scene.snap_uv_easy_variant != 'SELECT'
+            or context.area != painter.area or context.edit_object != painter.obj):
+        return
+    stage = painter.easy_selection
+    if stage is None or not stage.picker.bm.is_valid:
+        return
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+    matrix = painter.obj.matrix_world
+    view_projection = context.region_data.perspective_matrix
+    key = (tuple(sorted(stage.groups)), tuple(sorted(stage.hover)), stage.subtract, stage.confirmed,
+           tuple(v for row in matrix for v in row),
+           tuple(v for row in view_projection for v in row))
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+    if key != stage.overlay_key:
+        stage.overlay_batches = []
+        inverse_projection = view_projection.inverted_safe()
+        biased_positions = {}
+
+        def overlay_position(vert):
+            if vert not in biased_positions:
+                world = matrix @ vert.co
+                clip = view_projection @ world.to_4d()
+                # Bias only depth, preserving screen coordinates in both view types.
+                # Depth testing still hides the overlay behind other surfaces.
+                if clip.w > 1e-8 and clip.z > -clip.w:
+                    clip.z = max(-clip.w + 1e-7 * clip.w, clip.z - 2e-5 * clip.w)
+                    biased = inverse_projection @ clip
+                    if abs(biased.w) > 1e-8:
+                        world = biased.to_3d() / biased.w
+                biased_positions[vert] = world
+            return biased_positions[vert]
+
+        hover_faces = {f for g in stage.hover for f in stage.picker.components[g] if f.is_valid and not f.hide}
+        hover_color = (0.95, 0.35, 0.4) if stage.subtract else (1.0, 0.75, 0.25)
+        if hover_faces:
+            positions = [overlay_position(loop.vert) for tri in stage.picker.bm.calc_loop_triangles()
+                         if tri[0].face in hover_faces for loop in tri]
+            if positions:
+                stage.overlay_batches.append((batch_for_shader(shader, 'TRIS', {'pos': positions}), (*hover_color, 0.08)))
+        for groups, color in ((stage.groups, (0.35, 0.65, 0.72, 0.25 if stage.confirmed else 0.6)),
+                              (stage.hover, (*hover_color, 0.85))):
+            faces = {f for g in groups for f in stage.picker.components[g] if f.is_valid and not f.hide}
+            edges = {edge for face in faces for edge in face.edges
+                     if edge.seam or sum(f in faces for f in edge.link_faces) != 2}
+            if not edges:
+                edges = {edge for face in faces for edge in face.edges}
+            borders = [overlay_position(vert) for edge in edges for vert in edge.verts]
+            if borders:
+                stage.overlay_batches.append((batch_for_shader(shader, 'LINES', {'pos': borders}), color))
+        stage.overlay_key = key
+    gpu.state.blend_set('ALPHA')
+    gpu.state.depth_test_set('LESS_EQUAL')
+    gpu.state.depth_mask_set(False)
+    gpu.state.line_width_set(1.0)
+    try:
+        shader.bind()
+        for batch, color in stage.overlay_batches:
+            shader.uniform_float('color', color)
+            batch.draw(shader)
+    finally:
+        gpu.state.line_width_set(1.0)
+        gpu.state.depth_mask_set(True)
+        gpu.state.depth_test_set('NONE')
+        gpu.state.blend_set('NONE')
+
+
+
+class EasyMeshPicker:
+    def __init__(self, painter):
+        self.painter = painter
+        self.bm = bmesh.from_edit_mesh(painter.obj.data)
+        self.bm.faces.index_update()
+        self.bm.verts.index_update()
+        self.uv = self.bm.loops.layers.uv.verify()
+        self.faces = [f for f in self.bm.faces if not f.hide]
+        self.components, self.component_for = [], {}
+        for face in self.faces:
+            if face in self.component_for:
+                continue
+            index, pending, group = len(self.components), [face], []
+            self.component_for[face] = index
+            while pending:
+                current = pending.pop()
+                group.append(current)
+                for edge in current.edges:
+                    if edge.seam or edge.hide:
+                        continue
+                    for neighbor in edge.link_faces:
+                        if not neighbor.hide and neighbor not in self.component_for:
+                            self.component_for[neighbor] = index
+                            pending.append(neighbor)
+            self.components.append(group)
+        self.bvh = BVHTree.FromPolygons(
+            [v.co.copy() for v in self.bm.verts],
+            [[v.index for v in f.verts] for f in self.faces], all_triangles=False) if self.faces else None
+        self.inverse = painter.obj.matrix_world.inverted_safe()
+        self.depsgraph = bpy.context.evaluated_depsgraph_get()
+        self.hit_cache = {}
+        self.view_key = None
+        self.epsilon = max(1e-7, max((v.co.length for v in self.bm.verts), default=1)*1e-7)
+
+    def hit(self, point, through=False):
+        if self.bvh is None:
+            return set()
+        p = self.painter
+        view_key = (p.region.width, p.region.height,
+                    tuple(v for row in p.rv3d.perspective_matrix for v in row))
+        if view_key != self.view_key:
+            self.hit_cache.clear()
+            self.view_key = view_key
+        cache_key = (round(point.x/2), round(point.y/2), through)
+        if cache_key in self.hit_cache:
+            return set(self.hit_cache[cache_key])
+        world_origin = view3d_utils.region_2d_to_origin_3d(p.region, p.rv3d, point)
+        world_ray = view3d_utils.region_2d_to_vector_3d(p.region, p.rv3d, point)
+        origin = self.inverse @ world_origin
+        ray = (self.inverse.to_3x3() @ world_ray).normalized()
+        groups = set()
+        for _ in range(128 if through else 1):
+            location, _normal, index, _distance = self.bvh.ray_cast(origin, ray)
+            if location is None:
+                break
+            if not through:
+                # The active edit mesh has its own BVH; other visible objects may occlude it.
+                hit, pos, _n, _i, obj, _m = p.scene.ray_cast(
+                    self.depsgraph, world_origin, world_ray)
+                if hit and obj is not None and obj.original != p.obj:
+                    own_distance = (p.obj.matrix_world @ location-world_origin).length
+                    if (pos-world_origin).length < own_distance-1e-5:
+                        break
+            groups.add(self.component_for[self.faces[index]])
+            origin = location+ray*self.epsilon
+        self.hit_cache[cache_key] = set(groups)
+        return groups
+
+    def select(self, groups):
+        chosen = {f for group in groups for f in self.components[group]}
+        for face in self.bm.faces:
+            face.select_set(False)
+        for edge in self.bm.edges:
+            edge.select_set(False)
+        for vert in self.bm.verts:
+            vert.select_set(False)
+        for face in chosen:
+            face.select_set(True)
+        # face.select_set selects its edges/vertices too; flushing from vertex
+        # mode would also select neighbors across a seam through shared vertices.
+        return [(loop, loop[self.uv].uv.copy()) for face in self.faces if face in chosen for loop in face.loops]
+
+    def path_groups(self, points, closed=False):
+        if not points:
+            return set()
+        samples = []
+        for a, b in zip(points, points[1:]):
+            length = (b-a).length
+            count = max(1, int(math.ceil(length/8)))
+            side = Vector((-(b-a).y, (b-a).x)).normalized()*3 if length > 1e-6 else Vector((0,0))
+            for i in range(count):
+                sample = a.lerp(b, i/count)
+                samples.extend((sample, sample+side, sample-side))
+        samples.append(points[-1])
+        if closed and len(points) > 3:
+            # Scan the circle/ellipse interior too, so a contour around a piece picks it.
+            lo = Vector((min(p.x for p in points), min(p.y for p in points)))
+            hi = Vector((max(p.x for p in points), max(p.y for p in points)))
+            step = max(20.0, math.sqrt(max(1, (hi.x-lo.x)*(hi.y-lo.y))/256))
+            y = lo.y+step*0.5
+            while y < hi.y:
+                crossings = sorted(a.x+(y-a.y)*(b.x-a.x)/(b.y-a.y)
+                                   for a,b in zip(points,points[1:]) if (a.y>y)!=(b.y>y))
+                for left,right in zip(crossings[::2],crossings[1::2]):
+                    x = left+min(step*0.5,(right-left)*0.5)
+                    while x < right:
+                        samples.append(Vector((x,y)))
+                        x += step
+                y += step
+        groups, seen = set(), set()
+        for sample in samples:
+            if not (0 <= sample.x < self.painter.region.width and 0 <= sample.y < self.painter.region.height):
+                continue
+            key = (round(sample.x/2), round(sample.y/2))
+            if key in seen:
+                continue
+            seen.add(key)
+            groups.update(self.hit(sample, self.painter.scene.snap_uv_easy_through))
+        return groups
+
+
+class EasyStroke:
+    def __init__(self, painter, fixed_faces=None):
+        self.painter = painter
+        self.picker = EasyMeshPicker(painter)
+        self.fixed_groups = ({self.picker.component_for[f] for f in fixed_faces if f in self.picker.component_for}
+                             if fixed_faces is not None else None)
+        self.originals = {}
+        self.selection = [(elem, elem.select) for seq in (self.picker.bm.verts, self.picker.bm.edges, self.picker.bm.faces) for elem in seq]
+        self.current = []
+        self.last_preview = 0.0
+
+    def restore(self, selection=False, update=True):
+        if not self.picker.bm.is_valid or self.painter.obj.mode != 'EDIT':
+            return
+        for loop, value in self.originals.items():
+            if loop.is_valid:
+                loop[self.picker.uv].uv = value
+        if selection:
+            for elem, selected in self.selection:
+                if elem.is_valid:
+                    elem.select = selected
+        if update:
+            bmesh.update_edit_mesh(self.painter.obj.data, loop_triangles=False, destructive=False)
+            self.painter.obj.data.update()
+
+    def resolve(self, points, closed=False):
+        self.restore(update=False)
+        groups = self.fixed_groups if self.fixed_groups is not None else self.picker.path_groups(points, closed)
+        selected = self.picker.select(groups)
+        for loop, value in selected:
+            self.originals.setdefault(loop, value)
+        self.current = [(loop, self.originals[loop].copy()) for loop, _ in selected]
+        return self.current
+
+    def selection_data(self, points):
+        self.resolve(points)
+        return self.painter.obj, self.picker.bm, self.picker.uv, self.current
+
 
 
 # --- Persistent, editable viewport gradients ---
@@ -2813,6 +3699,8 @@ def gradient_selection(context):
 
 
 def matching_gradient(obj, uv, loops):
+    if not loops:
+        return None
     keys = gradient_loop_keys(loops)
     for record in reversed(gradient_records(obj.data)):
         saved = record.get("uvs", {})
@@ -2836,10 +3724,16 @@ def remember_paint_step(obj, uv, loops, records_before):
     records_after = obj.data.get(GRADIENT_RECORDS_KEY, '[]')
     if before == after and records_before == records_after:
         return
+    if painter.easy_selection is not None and painter.easy_selection.confirmed:
+        painter.easy_selection.painted = True
     bm = bmesh.from_edit_mesh(obj.data)
-    painter.paint_undo.append(dict(layer=uv.name, before=before, after=after,
-                                   records_before=records_before, records_after=records_after,
-                                   topology=(len(bm.verts), len(bm.edges), len(bm.faces))))
+    step = dict(layer=uv.name, before=before, after=after,
+                records_before=records_before, records_after=records_after,
+                topology=(len(bm.verts), len(bm.edges), len(bm.faces)))
+    if painter.paint_batch is not None:
+        painter.paint_batch.append(step)
+        return
+    painter.paint_undo.append(step)
     del painter.paint_undo[:-64]
     painter.paint_redo.clear()
 
@@ -2901,7 +3795,8 @@ def forget_gradient_records(obj, uv, loops):
 
 
 def gradient_local_path(obj, loops, screen_points, region, rv3d):
-    depth = sum((obj.matrix_world @ loop.vert.co for loop, _ in loops), Vector()) / len(loops)
+    depth = (sum((obj.matrix_world @ loop.vert.co for loop, _ in loops), Vector()) / len(loops)
+             if loops else obj.matrix_world @ (sum((Vector(p) for p in obj.bound_box), Vector()) / 8))
     inverse = obj.matrix_world.inverted_safe()
     return [list(inverse @ view3d_utils.region_2d_to_location_3d(region, rv3d, p, depth))
             for p in screen_points]
@@ -3292,7 +4187,7 @@ class PaletteGradientEdit:
         self.loops = [(loop, loop[self.uv].uv.copy()) for loop, _ in self.loops]
         self.drag = (index, handle)
 
-    def update_uvs(self, path_override=None):
+    def update_uvs(self, path_override=None, force=False):
         nodes = self.record['nodes']
         if path_override is not None:
             path = path_override
@@ -3313,6 +4208,15 @@ class PaletteGradientEdit:
         self.record['path'] = [list(p) for p in path]
         screen = [view3d_utils.location_3d_to_region_2d(self.region, self.rv3d, self.obj.matrix_world @ p) for p in path]
         if len(screen) >= 2 and all(p is not None for p in screen):
+            stroke = self.painter.easy_stroke if self.building else None
+            if stroke is not None:
+                now = time.perf_counter()
+                if not force and now-stroke.last_preview < 0.08:
+                    self.area.tag_redraw()
+                    return
+                stroke.last_preview = now
+                self.loops = stroke.resolve(screen, closed=self.record['kind'] == 'CIRCLE')
+                self.projection_cache = None
             projection_key = (self.region.width, self.region.height,
                               tuple(v for row in self.rv3d.perspective_matrix for v in row),
                               tuple(v for row in self.obj.matrix_world for v in row))
@@ -3326,11 +4230,16 @@ class PaletteGradientEdit:
                                            closed=self.record['kind'] == 'CIRCLE')
             bmesh.update_edit_mesh(self.obj.data, loop_triangles=False, destructive=False)
             self.obj.data.update()
-            self.dirty = True
+            self.dirty = bool(self.loops)
         self.area.tag_redraw()
         self.painter.uv_area.tag_redraw()
 
     def finish(self, cancel=False):
+        stroke = self.painter.easy_stroke if self.building else None
+        if stroke is not None and not cancel:
+            self.update_uvs(force=True)
+            if not self.loops:
+                cancel = True
         if self.obj.mode == 'EDIT' and self.bm.is_valid:
             if cancel:
                 for loop, uv in self.loops:
@@ -3345,6 +4254,8 @@ class PaletteGradientEdit:
                 # Do not let cavity auto-preview overwrite a handle edit.
                 self.painter.last_action_mode = 'PATH'
                 self.painter.last_applied_selection_signature = None
+        if stroke is not None:
+            self.painter.end_easy_stroke(cancel=cancel)
         self.drag = None
         self.painter.gradient_snap_target = None
         self.dirty = False
@@ -3857,9 +4768,14 @@ class UV_PT_snap_to_grid_panel(bpy.types.Panel):
         layout.prop(scene, "snap_uv_independent")
         layout.separator()
         layout.label(text="Painting:")
+        layout.prop(scene, "snap_uv_easy_mode")
+        if scene.snap_uv_easy_mode:
+            layout.prop(scene, "snap_uv_easy_variant")
+            layout.prop(scene, "snap_uv_easy_drag_gradient")
+            layout.prop(scene, "snap_uv_easy_through")
         layout.prop(scene, "snap_uv_path_style")
         layout.prop(scene, "snap_uv_show_gradients")
-        layout.prop(scene, "snap_uv_gradient_snap", text="Snap Gradient Points (F8)")
+        layout.prop(scene, "snap_uv_gradient_snap")
         layout.prop(scene, "snap_uv_path_stabilizer")
         layout.prop(scene, "snap_uv_gradient_direction")
         layout.separator()
@@ -3878,25 +4794,66 @@ class UV_PT_snap_to_grid_panel(bpy.types.Panel):
             box.prop(scene, "snap_uv_cavity_invert")
             box.prop(scene, "snap_uv_cavity_auto_preview")
         if scene.snap_uv_painting_active:
-            layout.label(text="Alt/Option + cell: Project from View")
-            layout.label(text="Shift + Ctrl/Cmd + cell: Select UVs")
-            layout.label(text="LMB drag in UV: Box Select")
-            layout.label(text="Shift/Ctrl + drag: Add/Subtract")
-            if scene.snap_uv_path_style == 'CIRCLE':
-                layout.label(text="Tab + drag: circle center / radius")
-                layout.label(text="Drag axis handles: ellipse")
-            elif scene.snap_uv_path_style == 'BEZIER':
-                layout.label(text="Hold Tab: click/drag curve points")
-                layout.label(text="Release Tab: finish curve")
-            else:
-                layout.label(text="Tab + LMB: draw path")
-            if scene.snap_uv_show_gradients:
-                layout.label(text="Cyan: move / Purple: rotate")
-                layout.label(text="White points: edit shape")
-            layout.label(text="Tab + Shift + LMB: distance source")
-            layout.label(text="Shift + cell: radial")
-            layout.label(text="Ctrl/Cmd + cell: cavity")
-            layout.label(text="RMB or Esc: stop")
+            stage = active_gradient_painter.easy_selection if active_gradient_painter else None
+            if scene.snap_uv_easy_mode and scene.snap_uv_easy_variant == 'SELECT':
+                if stage is not None and stage.confirmed:
+                    layout.label(text=f"Ready: {len(stage.groups)} pieces", icon='CHECKMARK')
+                else:
+                    layout.label(text=f"Select pieces: {len(stage.groups) if stage else 0}")
+            controls = layout.box()
+            controls.prop(scene, "snap_uv_controls_expanded", text="Controls",
+                          icon='TRIA_DOWN' if scene.snap_uv_controls_expanded else 'TRIA_RIGHT', emboss=False)
+            if scene.snap_uv_controls_expanded:
+                if scene.snap_uv_easy_mode:
+                    if scene.snap_uv_easy_variant == 'SELECT':
+                        if stage is not None and stage.confirmed:
+                            controls.label(text="Enter / Space / cell click: apply cell")
+                            if scene.snap_uv_easy_drag_gradient:
+                                controls.label(text="LMB: paint / drag: gradient on selection")
+                                controls.label(text="Backspace: edit selection / Esc: clear")
+                            else:
+                                controls.label(text="LMB: next selection / Shift: subtract")
+                            controls.label(text="L / Shift+L: linked select / deselect")
+                        else:
+                            controls.label(text="LMB drag: add / Shift: subtract")
+                            controls.label(text="Enter / Space / cell click: paint")
+                            controls.label(text="Tab + LMB: gradient on selection")
+                    else:
+                        controls.label(text="Mesh click: paint and select piece")
+                        if scene.snap_uv_easy_drag_gradient:
+                            controls.label(text="LMB drag: gradient / click applies on release")
+                            if scene.snap_uv_path_style == 'BEZIER':
+                                controls.label(text="Drag: two-point curve / Tab: multiple points")
+                        controls.label(text="Cell click: recolor selected pieces")
+                controls.label(text="Alt/Option + cell: Project from View")
+                controls.label(text="Replaces gradient on selected pieces")
+                controls.label(text="Works on the current cell too")
+                controls.label(text="Shift + Ctrl/Cmd + cell: Select UVs")
+                controls.label(text="LMB drag in UV: Box Select")
+                controls.label(text="Shift/Ctrl + drag: Add/Subtract")
+                if scene.snap_uv_path_style == 'CIRCLE':
+                    controls.label(text="Tab + drag: circle center / radius")
+                    controls.label(text="Drag axis handles: ellipse")
+                elif scene.snap_uv_path_style == 'BEZIER':
+                    controls.label(text="Hold Tab: click/drag curve points")
+                    controls.label(text="Release Tab: finish curve")
+                else:
+                    controls.label(text="Tab + LMB: draw path")
+                if scene.snap_uv_show_gradients:
+                    controls.label(text="Cyan: move / Purple: rotate")
+                    controls.label(text="White points: edit shape")
+                controls.label(text="F8: toggle gradient snapping")
+                controls.label(text="Ctrl/Cmd+Z: undo / Shift: redo")
+                controls.label(text="Tab + Shift + LMB: distance source")
+                controls.label(text="Shift + cell: radial")
+                controls.label(text="Ctrl/Cmd + cell: cavity")
+                if scene.snap_uv_easy_mode:
+                    controls.label(text="RMB / Esc: clear selection, keep painting")
+                    if scene.snap_uv_easy_variant == 'SELECT':
+                        controls.label(text="Empty click: clear selection")
+                    controls.label(text="Stop Painting button: exit")
+                else:
+                    controls.label(text="RMB or Esc: stop")
             layout.operator("uv.stop_painting", text="Stop Painting")
         else:
             edit_mesh = context.edit_object
