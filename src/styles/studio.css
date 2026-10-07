@@ -1063,9 +1063,17 @@ body {
   box-shadow: var(--glass-edge);
   backdrop-filter: blur(16px);
 }
-/* Blur at the masked scroll surface too: the fade creates a backdrop boundary. */
+/* Keep empty space between/below color cards transparent. */
 #app-window .sidebar2 .color-list {
-  backdrop-filter: blur(16px);
+  background: transparent;
+  backdrop-filter: none;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black var(--scroll-fade-top, 0px),
+    black calc(100% - var(--scroll-fade-bottom, 0px) * 2),
+    transparent
+  );
 }
 #app-window .draggable-color.selected > .pico {
   box-shadow:

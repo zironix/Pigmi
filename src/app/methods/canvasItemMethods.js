@@ -59,8 +59,8 @@ export const canvasItemMethods = {
   remove(index) {
     this.texture.items.splice(index, 1);
     this.selected = false;
-    if (this.current_tab !== 'search') {
-      this.current_tab = 'texture';
+    if (this.current_tab === 'item') {
+      this.current_tab = 'search';
     }
     this.addUndo();
   },

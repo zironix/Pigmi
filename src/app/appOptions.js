@@ -127,6 +127,7 @@ export default {
         zoom: -70,
         zoom_speed: 50,
         center_locked: true,
+        canvas_position: { left: 0, top: 0 },
         undo_count: 20,
         locked_left: true,
         locked_right: true,
@@ -181,7 +182,6 @@ export default {
       },
 
       // Canvas position used while center locking is disabled.
-      canvasPos: { left: 0, top: 0 },
       isPanning: false,
       panInput: null,
       panStartMouse: { x: 0, y: 0 },
@@ -197,6 +197,9 @@ export default {
     this.ls = useLayersStore();
   },
   computed: {
+    canvasPos() {
+      return this.texture.canvas_position;
+    },
     finalZoom() {
       return this.texture.zoom / 100 + 1;
     },

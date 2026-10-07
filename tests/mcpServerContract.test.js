@@ -46,4 +46,15 @@ describe('Pigmi MCP server contract', () => {
     expect(defaultsSchema).not.toHaveProperty('properties');
     expect(defaultsSchema.additionalProperties).toEqual({});
   });
+
+  it('exposes the script fast path with bounded code and dry-run/read-only controls', () => {
+    const script = tools.find((tool) => tool.name === 'pigmi_execute_script');
+    expect(script.description).toContain('No preliminary read required');
+    expect(script.inputSchema.properties.code).toMatchObject({ type: 'string', maxLength: 32768 });
+    expect(script.inputSchema.properties.readOnly).toMatchObject({
+      type: 'boolean',
+      default: false,
+    });
+    expect(script.inputSchema.properties.dryRun).toMatchObject({ type: 'boolean', default: false });
+  });
 });

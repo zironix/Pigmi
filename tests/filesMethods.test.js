@@ -124,6 +124,24 @@ describe('file loading', () => {
     expect(legacy).toMatchObject({ mix_preview: 1, center_locked: true });
   });
 
+  it('restores canvas position from document JSON and defaults legacy or invalid coordinates', () => {
+    const saved = JSON.stringify({
+      items: [],
+      center_locked: false,
+      zoom: -40,
+      canvas_position: { left: -123.5, top: 287 },
+    });
+    const loaded = fileMethods.fixTexture(JSON.parse(saved));
+    expect(loaded.canvas_position).toEqual({ left: -123.5, top: 287 });
+    expect(loaded.center_locked).toBe(false);
+    expect(loaded.zoom).toBe(-40);
+    expect(fileMethods.fixTexture({ items: [] }).canvas_position).toEqual({ left: 0, top: 0 });
+    expect(
+      fileMethods.fixTexture({ items: [], canvas_position: { left: 'bad', top: Infinity } })
+        .canvas_position,
+    ).toEqual({ left: 0, top: 0 });
+  });
+
   it('waits for canvas dimensions to update before drawing a loaded document', async () => {
     const sourceTexture = {
       width: 512,

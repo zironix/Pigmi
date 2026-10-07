@@ -46,6 +46,60 @@ copied shell commands; separate argument fields take the raw path as a single va
 - Create, duplicate, rename, recolor, move, hide, or delete items and folders.
 - Edit gradient, opacity, material, canvas, and export settings.
 - Request a canvas preview, validate a document, open/save documents, and undo changes.
+- Run JavaScript loops and formulas on local document data, then apply one atomic batch.
+
+## JavaScript scripts
+
+Use `pigmi_execute_script` for repeated edits, procedural palettes, or local analysis. It reads
+the complete current document internally, so the model does not need to fetch every item first.
+Only the explicitly returned JSON and a compact write summary enter the model context.
+Simple creation and duplication can still use the existing typed tools.
+
+For example, a single call can adjust selected materials using their current values:
+
+```js
+const items = pigmi.items({ selected: true });
+for (const item of items) {
+  pigmi.update(item, {
+    material: { roughness: Math.min(100, (item.material.roughness ?? 50) + 10) },
+  });
+}
+return { changed: items.length };
+```
+
+The tool accepts `code`, optional `expectedRevision`, `dryRun`, and `readOnly`. Inspection tasks
+should use `readOnly: true`; writes in that mode are rejected. `dryRun: true` checks the entire
+generated batch without applying it. Writes automatically use the snapshot revision even if
+the caller omits `expectedRevision`, rejecting intervening document changes.
+
+The synchronous `pigmi` API provides:
+
+| Member                                                         | Behavior                                                                                                                     |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `document`, `defaults`, `selection`                            | Frozen document settings, creation defaults, and selected IDs.                                                               |
+| `items(filter?)`                                               | All items, a predicate, or a selector with `ids`, `paths`, `folderPath`, `query`, `selected`. No pagination inside a script. |
+| `folders()`                                                    | Complete folder index with ID, name, path, parent path, visibility.                                                          |
+| `update(itemOrId, patch)`                                      | Queue an `update_item`; arrays of items/IDs and operation selectors are also accepted.                                       |
+| `recolor(itemOrId, colors)`                                    | Queue a color change, using hex color arrays.                                                                                |
+| `create(items, { folderPath, defaults }?)`                     | Queue new gradients, inheriting unspecified editor defaults.                                                                 |
+| `duplicateFolder(sourcePath, newPath, { offset, itemEdits }?)` | Queue complete folder duplication with optional edits.                                                                       |
+| `operation(op)`                                                | Queue any supported operation; use the operation reference for unfamiliar forms.                                             |
+| `layout(options)`                                              | Set batch placement, using the same options as `pigmi_create_items`.                                                         |
+
+Item reads include `id`, `name`, `path`, `folderPath`, `itemType`, `shape`, `direction`, `colorMode`,
+`colors`, `colorStops`, `colorOffsets`, `size`, `steps`, `x`, `y`, `visible`, and `material`.
+Material names match writes, including `emissionStrength` and `clearcoatRoughness`.
+All reads stay at the initial snapshot. Writes queue until the script succeeds; direct mutation
+of read objects is rejected. New IDs become available only in the final write result.
+Use `Backpack/Shade` as a path filter (`paths: [...]`), not as an ID passed to `update`.
+
+Code runs in a separate worker with a QuickJS WebAssembly runtime, without host callbacks.
+It has no Node, DOM, filesystem, network, timers, imports, or asynchronous execution.
+Limits are 32 KiB of code, 8 MiB of snapshot JSON, 64 MiB interpreter memory, two seconds of
+interpreter time with a four-second worker deadline, 500 queued operations, and 16 KiB of
+returned JSON. Exceptions, timeouts, or rejected operations leave the document unchanged.
+A successful edit uses the existing validation, rendering, and Undo path once for the batch.
+After updating Pigmi, reload the MCP client's connection to discover the new tool.
 
 Reads are selective. The overview defaults to a summary; detailed fields and larger indexes are
 requested as needed. Clients can pass `knownState` to check whether a previous overview is still

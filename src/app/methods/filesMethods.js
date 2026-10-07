@@ -346,6 +346,11 @@ export const fileMethods = {
     if (texture.center_locked == null) {
       texture.center_locked = true;
     }
+    const position = texture.canvas_position;
+    texture.canvas_position = {
+      left: Number.isFinite(position?.left) ? position.left : 0,
+      top: Number.isFinite(position?.top) ? position.top : 0,
+    };
     for (const channel of MATERIAL_CHANNELS) {
       texture[`save_${channel}`] ??= channel === 'mrc' ? 0 : 1;
     }

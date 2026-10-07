@@ -71,6 +71,8 @@ get_operation_reference
   -> only documentation for operation types about to be used
 apply_operations
   -> validate against a cloned document, then commit atomically
+execute_script
+  -> internal complete snapshot -> isolated QuickJS worker -> one apply_operations commit
 validate_document
   -> structural and value diagnostics after complex edits
 ```
@@ -128,6 +130,17 @@ deliberately short. It defines the safe fast path and model-driven convention in
 duplicating the complete workflow across the model context. Detailed reference-image, material,
 variant, and layout guidance is available with prompt argument `detailed:"true"`; the default prompt is brief.
 Straightforward palette creation should take two tool calls: one overview and one specialized write.
+
+Procedural work may use `pigmi_execute_script` without preliminary model-facing reads. The
+renderer builds an internal snapshot using the same semantic fields as the read tools. The STDIO
+adapter executes code in a bounded worker using a self-contained QuickJS WebAssembly build;
+scripts receive only snapshot data and queue-producing functions inside the interpreter.
+No host functions or Electron objects are exposed. Returned JSON is bounded separately from
+generated operations. The adapter submits the generated batch with the snapshot's revision,
+`allowPartial:false`, and optional `dryRun`, through the existing editor commit/Undo path.
+Scripts see snapshot values throughout execution; queued writes are not visible to subsequent
+reads. Each worker is terminated after its result or deadline. The MCP build emits `server.mjs`
+and `script-worker.mjs`; the WebAssembly binary is embedded, so no runtime download is needed.
 
 ### Local bridge security
 

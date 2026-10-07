@@ -9,6 +9,7 @@ import { collectItemFolderPaths, getMapValueById } from '../../ai/aiPlanShared';
 import { applyLayerSelection } from '../../stores/layers';
 import { documentRevision, fingerprint } from '../../ai/editorRevision';
 import { saveDocumentSnapshot } from './filesMethods';
+import { buildScriptSnapshot } from '../../ai/scriptSnapshot';
 
 const MAX_OPERATIONS = 500;
 const SUPPORTED_OPERATIONS = new Set([
@@ -273,6 +274,22 @@ export const mcpMethods = {
     switch (method) {
       case 'get_overview':
         return this.buildMcpOverview(params);
+      case 'get_script_snapshot': {
+        const revision = documentRevision(this.texture);
+        if (params?.expectedRevision && params.expectedRevision !== revision) {
+          const error = new Error('Document changed since it was inspected');
+          error.code = 'REVISION_CONFLICT';
+          throw error;
+        }
+        return {
+          revision,
+          ...buildScriptSnapshot({
+            texture: this.texture,
+            selectionIds: this.getMcpSelectionIds(),
+            lastItem: this.lastItem,
+          }),
+        };
+      }
       case 'get_items':
         return {
           revision: documentRevision(this.texture),

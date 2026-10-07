@@ -13,10 +13,11 @@ import {
 } from './instructions.mjs';
 import { getOperationReference } from './operation-reference.mjs';
 import { errorToolResult, jsonToolResult } from './tool-results.mjs';
+import { runEditorScript } from './script-runner.mjs';
 
 const bridge = new PigmiBridgeClient();
 const server = new McpServer(
-  { name: 'pigmi', version: '1.5.0' },
+  { name: 'pigmi', version: '1.6.0' },
   { instructions: PIGMI_SERVER_INSTRUCTIONS },
 );
 
@@ -180,7 +181,7 @@ server.registerTool(
   'pigmi_get_overview',
   {
     description:
-      'Returns revision, stateRevision, defaults, selection, and root/selected layers. Reuse knownState=stateRevision to get unchanged:true when current. Use detail:full for the full index or read exact folders/items. A simple new palette needs only this then pigmi_create_items.',
+      'Summary: revision/stateRevision, defaults, selection, root layers. knownState=stateRevision returns unchanged:true when current. detail:full expands the index. Simple creation: this then pigmi_create_items.',
     inputSchema: {
       detail: z.enum(['summary', 'full']).default('summary'),
       knownState: z.string().optional(),
@@ -193,8 +194,7 @@ server.registerTool(
 server.registerTool(
   'pigmi_get_items',
   {
-    description:
-      'Fetch only missing fields for exact items or a palette inventory. Reuse details already in context when their revision is current.',
+    description: 'Read missing item fields or palette colors. Reuse current reads.',
     inputSchema: { requests: z.array(itemRequestSchema).min(1).max(4) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
@@ -204,8 +204,7 @@ server.registerTool(
 server.registerTool(
   'pigmi_get_folders',
   {
-    description:
-      'Read exact subtrees, bounds, and requested fields. Check complete/truncated before treating a result as a full template.',
+    description: 'Read folder subtrees/bounds/fields. Check complete/truncated.',
     inputSchema: {
       paths: z.array(z.string().min(1)).min(1).max(8),
       fields: z.array(detailFieldSchema).default([]),
@@ -219,7 +218,7 @@ server.registerTool(
   'pigmi_compare_folders',
   {
     description:
-      'Compare sibling folders by relative path. Compact output stores identical fields in role.shared; merge with each values entry. compact:false returns expanded values.',
+      'Compare folders by relative path. Merge role.shared into values; compact:false expands them.',
     inputSchema: {
       paths: z.array(z.string().min(1)).min(2).max(8),
       fields: z.array(detailFieldSchema).default([]),
@@ -343,7 +342,7 @@ server.registerTool(
   'pigmi_get_operation_reference',
   {
     description:
-      'Returns references only for a planned generic pigmi_apply_operations call. Never use before pigmi_create_items, pigmi_duplicate_folder_variants, or pigmi_edit_folder_items.',
+      'References for unfamiliar pigmi_apply_operations or script operation(op). Unnecessary for typed writes.',
     inputSchema: { operations: z.array(z.string()).min(1).max(20) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
@@ -354,7 +353,7 @@ server.registerTool(
   'pigmi_apply_operations',
   {
     description:
-      'Atomic write for other operations. Fetch references only for unfamiliar operations. Pass expectedRevision. dryRun returns current revision and a separate proposedRevision without applying changes.',
+      'Atomic generic write. Pass expectedRevision. dryRun returns revision/proposedRevision without changes.',
     inputSchema: {
       operations: z.array(z.record(z.string(), z.unknown())).max(500),
       expectedRevision: z.string().optional(),
@@ -365,6 +364,28 @@ server.registerTool(
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
   async (params) => callBridge('apply_operations', params),
+);
+
+server.registerTool(
+  'pigmi_execute_script',
+  {
+    description:
+      'Synchronous JS on a local snapshot; return compact JSON. No preliminary read required. pigmi: document/defaults/selection; items(predicate|{ids,paths,folderPath,query,selected})/folders(); update(itemOrId,patch), recolor(itemOrId,colors), create(items,{folderPath?,defaults?}), duplicateFolder(sourcePath,newPath,{offset?,itemEdits?}), operation(op), layout(options). Items have id/path/name/colors/material/size/x/y. Frozen reads; writes return no IDs and commit once with Undo. No async or host access.',
+    inputSchema: {
+      code: z.string().min(1).max(32768),
+      expectedRevision: z.string().optional(),
+      dryRun: z.boolean().default(false),
+      readOnly: z.boolean().default(false),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  async (params) => {
+    try {
+      return jsonToolResult(await runEditorScript(bridge, params));
+    } catch (error) {
+      return errorToolResult(error);
+    }
+  },
 );
 
 server.registerTool(
@@ -379,8 +400,7 @@ server.registerTool(
 server.registerTool(
   'pigmi_get_canvas_preview',
   {
-    description:
-      'Returns the rendered canvas as PNG. Use only when visual evidence is needed; routine successful writes do not require a preview.',
+    description: 'Canvas PNG only for necessary visual checks; skip routine previews.',
     inputSchema: { maxSide: z.number().int().min(64).max(4096).default(1024) },
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
@@ -404,8 +424,7 @@ server.registerTool(
 server.registerTool(
   'pigmi_get_project',
   {
-    description:
-      'Lists project documents and the open one. Use only for an explicit project/document request.',
+    description: 'List project documents when requested.',
     annotations: { readOnlyHint: true, idempotentHint: true },
   },
   async () => callBridge('get_project', {}),

@@ -7,6 +7,26 @@ import { historyMethods } from '../src/app/methods/historyMethods';
 import { redistributeColorOffsets } from '../src/utils/colorStops';
 
 describe('editor actions', () => {
+  it('deletes an unselected item with RMB without opening settings or its inspector', () => {
+    const context = {
+      ...canvasItemMethods,
+      texture: { items: [{ id: 1 }, { id: 2 }] },
+      selected: false,
+      current_tab: 'search',
+      stopZoomAnimation: vi.fn(),
+      isToggleSelectionPressed: () => false,
+      getHitIndex: () => 0,
+      select: vi.fn(),
+      draw: vi.fn(),
+      addUndo: vi.fn(),
+    };
+    canvasInteractionMethods.mousedown.call(context, { button: 2 });
+    expect(context.texture.items.map((item) => item.id)).toEqual([2]);
+    expect(context.current_tab).toBe('search');
+    expect(context.select).not.toHaveBeenCalled();
+    expect(context.addUndo).toHaveBeenCalledOnce();
+  });
+
   it('creates independent item colors, offsets, and dimensions', () => {
     const template = {
       type: 'g',

@@ -92,7 +92,8 @@ export const canvasInteractionMethods = {
       window.addEventListener('blur', this.onCanvasDragEnd);
     }
     if (event.button === SECONDARY_MOUSE_BUTTON) {
-      const idx = this.select(event, false);
+      // Deleting under the pointer must not open the item's inspector first.
+      const idx = this.getHitIndex(event);
       if (idx !== null && idx !== undefined && idx !== false) {
         this.remove(idx);
       } else {
