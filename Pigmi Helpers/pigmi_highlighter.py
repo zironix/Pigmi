@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Pigmi: Highlighter",
     "author": "Pavlov Oleg (final)",
-    "version": (1, 12, 2),
+    "version": (1, 13, 0),
     "blender": (5, 0, 0),
     "location": "View3D > Tool",
     "description": "Pigmi Highlighter — vertex-color highlighter with palette and quick fills",
@@ -10,6 +10,7 @@ bl_info = {
 
 import bpy
 import bmesh
+from array import array
 from collections import deque
 from bpy.props import (
     FloatVectorProperty, BoolProperty, IntProperty,
@@ -17,10 +18,14 @@ from bpy.props import (
 )
 from bpy.types import Panel, Operator, PropertyGroup
 
-# ------------------------------
-# Module-level in-memory backup
-# ------------------------------
-_PREVIEW_BACKUP = {}  # key: f"{obj.as_pointer()}_{me.as_pointer()}" -> {'domain':..., 'data':[...]}
+MAIN_ATTRIBUTE = "Col"
+COLOR_DOMAINS = {'CORNER', 'POINT'}
+
+# Preview backups live in memory only: key -> {'name', 'domain', 'data': array('f')}.
+_PREVIEW_BACKUP = {}
+# Set while an operator changes the color sliders itself, so the slider update
+# callback does not paint a second time with the radius settings.
+_SUPPRESS_PARAM_UPDATE = False
 
 # ------------------------------
 # Helpers
@@ -34,480 +39,207 @@ def debug_print(*args):
 def _make_key(obj, me):
     return f"{int(obj.as_pointer())}_{int(me.as_pointer())}"
 
-def get_existing_color_attribute(mesh, name=None):
-    attrs = getattr(mesh, "attributes", None)
+def _redraw_3d_views():
     try:
-        active = attrs.active_color if attrs is not None else None
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                area.tag_redraw()
+    except Exception:
+        pass
+
+def get_existing_color_attribute(mesh, name=None):
+    attrs = mesh.color_attributes
+    if name:
+        ca = attrs.get(name)
+        if ca and ca.domain in COLOR_DOMAINS:
+            return ca
+    try:
+        active = attrs.active_color
     except Exception:
         active = None
-
-    if name:
-        ca = mesh.color_attributes.get(name)
-        if ca and ca.domain in {'CORNER', 'POINT'}:
+    if active is not None:
+        ca = attrs.get(getattr(active, "name", ""))
+        if ca and ca.domain in COLOR_DOMAINS:
             return ca
-
-    if active:
-        name_active = getattr(active, "name", None) or str(active)
-        ca = mesh.color_attributes.get(name_active)
-        if ca and ca.domain in {'CORNER', 'POINT'}:
+    for ca in attrs:
+        if ca.domain in COLOR_DOMAINS:
             return ca
-
-    for ca in mesh.color_attributes:
-        if ca.domain in {'CORNER', 'POINT'}:
-            return ca
-
     return None
 
-def create_color_attribute(mesh, name="Col", domain='CORNER'):
-    ca = mesh.color_attributes.get(name)
-    if ca:
-        return ca
-    try:
-        ca = mesh.color_attributes.new(name=name, type='BYTE_COLOR', domain=domain)
-    except Exception:
+def activate_color_attribute(mesh, ca):
+    """Shows the attribute in the viewport and uses it for rendering, without an undo step."""
+    attrs = mesh.color_attributes
+    for prop in ("active_color_name", "default_color_name"):
         try:
-            vc = mesh.vertex_colors.new(name=name)
-            ca = mesh.color_attributes.get(vc.name) if mesh.color_attributes else None
+            setattr(attrs, prop, ca.name)
+        except Exception:
+            pass
+
+def create_color_attribute(mesh, name=MAIN_ATTRIBUTE, domain='CORNER'):
+    ca = mesh.color_attributes.get(name)
+    if ca is None:
+        try:
+            ca = mesh.color_attributes.new(name=name, type='BYTE_COLOR', domain=domain)
         except Exception:
             ca = None
-
     if ca is not None:
-        try:
-            for i, a in enumerate(mesh.attributes):
-                if a.name == ca.name:
-                    try:
-                        mesh.attributes.active_color_index = i
-                        mesh.attributes.active_color_name = ca.name
-                        mesh.attributes.render_color_index = i
-                    except Exception:
-                        pass
-                    break
-            try:
-                bpy.ops.geometry.color_attribute_render_set(name=ca.name)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
+        activate_color_attribute(mesh, ca)
     return ca
 
-def get_or_create_color_attribute(mesh, name="Col", domain='CORNER'):
+def get_or_create_color_attribute(mesh, name=MAIN_ATTRIBUTE, domain='CORNER'):
     ca = get_existing_color_attribute(mesh, name)
-    if ca:
-        try:
-            for i, a in enumerate(mesh.attributes):
-                if a.name == ca.name:
-                    try:
-                        mesh.attributes.active_color_index = i
-                        mesh.attributes.active_color_name = ca.name
-                        mesh.attributes.render_color_index = i
-                    except Exception:
-                        pass
-                    break
-            try:
-                bpy.ops.geometry.color_attribute_render_set(name=ca.name)
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return ca
-    return create_color_attribute(mesh, name=name, domain=domain)
-
-def copy_color_attribute(mesh, src_name, dst_name):
-    src = mesh.color_attributes.get(src_name)
-    dst = mesh.color_attributes.get(dst_name)
-    if not src or not dst or src.domain != dst.domain:
-        return
-    if src.domain == 'CORNER':
-        for i in range(min(len(src.data), len(dst.data))):
-            dst.data[i].color = src.data[i].color
-    elif src.domain == 'POINT':
-        for i in range(min(len(src.data), len(dst.data))):
-            dst.data[i].color = src.data[i].color
+    if ca is None:
+        return create_color_attribute(mesh, name=name, domain=domain)
+    activate_color_attribute(mesh, ca)
+    return ca
 
 # ------------------------------
-# Robust backup / restore
+# Color I/O
+#
+# BMesh exposes byte colors as stored (sRGB) and float colors as linear values.
+# Backups, restores and painting all use that same representation; in Object
+# Mode the bulk foreach path reads color_srgb for byte attributes to match it.
+#
+# Attribute RNA references become invalid in Edit Mode once BMesh layers change,
+# so the code keeps a plain (name, domain, data_type) spec instead.
 # ------------------------------
+def _attribute_spec(ca):
+    return (ca.name, ca.domain, ca.data_type)
+
+def _bmesh_layer(bm, spec):
+    name, domain, data_type = spec
+    elements = bm.loops if domain == 'CORNER' else bm.verts
+    layers = elements.layers.float_color if data_type == 'FLOAT_COLOR' else elements.layers.color
+    layer = layers.get(name)
+    if layer is None:
+        raise RuntimeError(f"Color layer {name!r} is missing from the mesh")
+    return layer
+
+def _bmesh_elements(bm, spec):
+    if spec[1] == 'CORNER':
+        return [loop for face in bm.faces for loop in face.loops]
+    return list(bm.verts)
+
+def _foreach_property(spec):
+    return 'color_srgb' if spec[2] == 'BYTE_COLOR' else 'color'
+
+def _open_bmesh(obj, me):
+    if obj.mode == 'EDIT':
+        return bmesh.from_edit_mesh(me), False
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    return bm, True
+
+def _close_bmesh(obj, me, bm, owned, write):
+    if owned:
+        if write:
+            bm.to_mesh(me)
+        bm.free()
+    elif write:
+        bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
+    if write:
+        me.update()
+
+def _read_colors(obj, me, spec):
+    if obj.mode != 'EDIT':
+        ca = me.color_attributes[spec[0]]
+        data = array('f', bytes(16 * len(ca.data)))
+        ca.data.foreach_get(_foreach_property(spec), data)
+        return data
+    # Mesh attribute data is empty while the object is in Edit Mode.
+    bm = bmesh.from_edit_mesh(me)
+    layer = _bmesh_layer(bm, spec)
+    return array('f', [channel for element in _bmesh_elements(bm, spec) for channel in element[layer]])
+
+def _write_bmesh_colors(bm, spec, data):
+    layer = _bmesh_layer(bm, spec)
+    for index, element in enumerate(_bmesh_elements(bm, spec)):
+        offset = index * 4
+        element[layer] = data[offset:offset + 4]
+
+def _element_count(obj, me, spec):
+    if obj.mode != 'EDIT':
+        return len(me.color_attributes[spec[0]].data)
+    bm = bmesh.from_edit_mesh(me)
+    if spec[1] == 'CORNER':
+        return sum(len(face.loops) for face in bm.faces)
+    return len(bm.verts)
+
+# ------------------------------
+# Preview backup / restore
+# ------------------------------
+def _store_backup(obj, me, ca):
+    spec = _attribute_spec(ca)
+    _PREVIEW_BACKUP[_make_key(obj, me)] = {'spec': spec, 'data': _read_colors(obj, me, spec)}
+
 def _backup_col_in_memory(obj, me):
-    global _PREVIEW_BACKUP
-    key = _make_key(obj, me)
-    if key in _PREVIEW_BACKUP:
-        #debug_print("_backup_col_in_memory: already have backup for key", key)
+    if _make_key(obj, me) in _PREVIEW_BACKUP:
         return
-
-    data = []
-    domain = None
-    bm = None
-    created_bm = False
-    try:
-        if obj.mode == 'EDIT':
-            bm = bmesh.from_edit_mesh(me)
-            created_bm = False
-        else:
-            bm = bmesh.new()
-            bm.from_mesh(me)
-            created_bm = True
-
-        try:
-            bm.verts.ensure_lookup_table()
-        except Exception:
-            pass
-        try:
-            bm.faces.ensure_lookup_table()
-        except Exception:
-            pass
-
-        ca = me.color_attributes.get("Col")
-        if ca:
-            domain = ca.domain
-            if domain == 'CORNER':
-                layer = bm.loops.layers.color.get("Col")
-                if layer:
-                    for face in bm.faces:
-                        for loop in face.loops:
-                            try:
-                                c = loop[layer]
-                                data.append((float(c[0]), float(c[1]), float(c[2]), float(c[3]) if len(c) > 3 else 1.0))
-                            except Exception:
-                                data.append((0.0,0.0,0.0,1.0))
-            elif domain == 'POINT':
-                layer = bm.verts.layers.color.get("Col")
-                if layer:
-                    for v in bm.verts:
-                        try:
-                            c = v[layer]
-                            data.append((float(c[0]), float(c[1]), float(c[2]), float(c[3]) if len(c) > 3 else 1.0))
-                        except Exception:
-                            data.append((0.0,0.0,0.0,1.0))
-    except Exception as e:
-        #debug_print("_backup_col_in_memory: bmesh read failed:", e)
-        data = []
-    finally:
-        try:
-            if created_bm and bm is not None:
-                bm.free()
-        except Exception:
-            pass
-
-    if not data:
-        ca = me.color_attributes.get("Col")
-        if ca and len(ca.data) > 0:
-            domain = ca.domain
-            try:
-                for item in ca.data:
-                    col = tuple(float(x) for x in item.color)
-                    if len(col) == 3:
-                        col = (col[0], col[1], col[2], 1.0)
-                    data.append(col)
-            except Exception as e:
-                #debug_print("_backup_col_in_memory: direct read failed:", e)
-                data = []
-
-    if not data:
-        for other in me.color_attributes:
-            if other.domain in {'CORNER','POINT'} and len(other.data) > 0:
-                #debug_print("_backup_col_in_memory: falling back to other attribute", other.name)
-                domain = other.domain
-                try:
-                    for item in other.data:
-                        col = tuple(float(x) for x in item.color)
-                        if len(col) == 3:
-                            col = (col[0], col[1], col[2], 1.0)
-                        data.append(col)
-                except Exception as e:
-                    #debug_print("_backup_col_in_memory: fallback read failed:", e)
-                    data = []
-                break
-
-    if not data:
-        try:
-            if hasattr(me, "loops") and len(me.loops) > 0:
-                domain = 'CORNER'
-                n = len(me.loops)
-            else:
-                domain = 'POINT'
-                n = len(me.vertices)
-        except Exception:
-            domain = 'CORNER'
-            n = len(getattr(me, "loops", []))
-        data = [(0.0,0.0,0.0,1.0)] * n
-        #debug_print("_backup_col_in_memory: fallback default backup created, length", n)
-
-    _PREVIEW_BACKUP[key] = {'domain': domain, 'data': data}
-    #debug_print("_backup_col_in_memory: backup stored key", key, "domain", domain, "len", len(data))
-
+    ca = get_or_create_color_attribute(me)
+    if ca is not None:
+        _store_backup(obj, me, ca)
 
 def _overwrite_backup_with_current(obj, me):
-    global _PREVIEW_BACKUP
-    key = _make_key(obj, me)
+    ca = get_or_create_color_attribute(me)
+    if ca is None:
+        raise RuntimeError("No color attribute to back up")
+    _store_backup(obj, me, ca)
 
-    ca = me.color_attributes.get("Col")
-    if ca and len(ca.data) > 0:
-        data = []
-        domain = ca.domain
-        try:
-            for item in ca.data:
-                col = tuple(float(x) for x in item.color)
-                if len(col) == 3:
-                    col = (col[0], col[1], col[2], 1.0)
-                data.append(col)
-            _PREVIEW_BACKUP[key] = {'domain': domain, 'data': data}
-            #debug_print("_overwrite_backup_with_current: direct read wrote backup key", key, "len", len(data))
-            return
-        except Exception as e:
-            debug_print("_overwrite_backup_with_current: direct read failed:", e)
-
-    bm = None
-    created_bm = False
-    try:
-        if obj.mode == 'EDIT':
-            bm = bmesh.from_edit_mesh(me)
-            created_bm = False
-        else:
-            bm = bmesh.new()
-            bm.from_mesh(me)
-            created_bm = True
-
-        try:
-            bm.verts.ensure_lookup_table()
-        except Exception:
-            pass
-        try:
-            bm.faces.ensure_lookup_table()
-        except Exception:
-            pass
-
-        data = []
-        domain = (ca.domain if ca else ('CORNER' if len(getattr(me, "loops", [])) > 0 else 'POINT'))
-
-        if domain == 'CORNER':
-            layer = bm.loops.layers.color.get("Col")
-            if layer:
-                for face in bm.faces:
-                    for loop in face.loops:
-                        try:
-                            c = loop[layer]
-                            data.append((float(c[0]), float(c[1]), float(c[2]), float(c[3]) if len(c) > 3 else 1.0))
-                        except Exception:
-                            data.append((0.0, 0.0, 0.0, 1.0))
-        else:
-            layer = bm.verts.layers.color.get("Col")
-            if layer:
-                for v in bm.verts:
-                    try:
-                        c = v[layer]
-                        data.append((float(c[0]), float(c[1]), float(c[2]), float(c[3]) if len(c) > 3 else 1.0))
-                    except Exception:
-                        data.append((0.0, 0.0, 0.0, 1.0))
-
-        if created_bm and bm is not None:
-            bm.free()
-
-        if data:
-            _PREVIEW_BACKUP[key] = {'domain': domain, 'data': data}
-            #debug_print("_overwrite_backup_with_current: bmesh read wrote backup key", key, "len", len(data))
-            return
-        else:
-            debug_print("_overwrite_backup_with_current: bmesh read produced no data for key", key)
-    except Exception as e:
-        #debug_print("_overwrite_backup_with_current: bmesh fallback failed:", e)
-        try:
-            if created_bm and bm is not None:
-                bm.free()
-        except Exception:
-            pass
-
-    try:
-        if hasattr(me, "loops") and len(me.loops) > 0:
-            domain = 'CORNER'
-            n = len(me.loops)
-        else:
-            domain = 'POINT'
-            n = len(me.vertices)
-    except Exception:
-        domain = 'CORNER'
-        n = len(getattr(me, "loops", []))
-    data = [(0.0, 0.0, 0.0, 1.0)] * n
-    _PREVIEW_BACKUP[key] = {'domain': domain, 'data': data}
-    #debug_print("_overwrite_backup_with_current: wrote fallback backup for key", key, "len", n)
-
+def _backup_for(obj, me):
+    """Returns the backup while it still fits the mesh, otherwise None."""
+    backup = _PREVIEW_BACKUP.get(_make_key(obj, me))
+    if not backup:
+        return None
+    spec = backup['spec']
+    ca = me.color_attributes.get(spec[0])
+    # Blender reuses object memory, so a key can outlive its object (e.g. after undo).
+    if ca is None or _attribute_spec(ca) != spec:
+        return None
+    # A topology edit since the backup would scramble colors; refuse instead.
+    if _element_count(obj, me, spec) * 4 != len(backup['data']):
+        debug_print("Preview backup no longer matches the mesh topology")
+        return None
+    return backup
 
 def _restore_col_from_memory(obj, me):
-    global _PREVIEW_BACKUP
-    key = _make_key(obj, me)
-    if key not in _PREVIEW_BACKUP:
-        #debug_print("_restore_col_from_memory: no backup for key", key)
+    backup = _backup_for(obj, me)
+    if backup is None:
         return False
-    backup = _PREVIEW_BACKUP[key]
-    domain = backup.get('domain', 'CORNER')
-    data = backup.get('data', [])
-    ca = get_or_create_color_attribute(me, name="Col", domain=domain)
-    if not ca:
-        #debug_print("_restore_col_from_memory: failed to get/create Col")
-        return False
-
-    try:
-        if len(ca.data) >= len(data) and len(data) > 0:
-            n = min(len(ca.data), len(data))
-            for i in range(n):
-                ca.data[i].color = data[i]
-            #debug_print("_restore_col_from_memory: direct write restored", me.name, "written=", n, "key=", key)
-            me.update()
-            try:
-                for area in bpy.context.screen.areas:
-                    if area.type == 'VIEW_3D':
-                        area.tag_redraw()
-            except Exception:
-                pass
-            return True
-    except Exception as e:
-        debug_print("_restore_col_from_memory: direct write failed:", e)
-
-    bm = None
-    created_bm = False
-    try:
-        if obj.mode == 'EDIT':
-            bm = bmesh.from_edit_mesh(me)
-            created_bm = False
-        else:
-            bm = bmesh.new()
-            bm.from_mesh(me)
-            created_bm = True
-
-        try:
-            bm.verts.ensure_lookup_table()
-        except Exception:
-            pass
-        try:
-            bm.faces.ensure_lookup_table()
-        except Exception:
-            pass
-
-        if domain == 'CORNER':
-            layer = bm.loops.layers.color.get(ca.name)
-            if layer is None:
-                layer = bm.loops.layers.color.new(ca.name)
-            idx = 0
-            count = 0
-            for face in bm.faces:
-                for loop in face.loops:
-                    if idx < len(data):
-                        loop[layer] = data[idx]
-                        count += 1
-                    idx += 1
-            #debug_print("_restore_col_from_memory: bmesh wrote CORNER entries=", count, "key=", key)
-        else:
-            layer = bm.verts.layers.color.get(ca.name)
-            if layer is None:
-                layer = bm.verts.layers.color.new(ca.name)
-            count = 0
-            for i, v in enumerate(bm.verts):
-                if i < len(data):
-                    v[layer] = data[i]
-                    count += 1
-            #debug_print("_restore_col_from_memory: bmesh wrote POINT entries=", count, "key=", key)
-
-        if obj.mode == 'EDIT':
-            bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
-        else:
-            bm.to_mesh(me)
-            bm.free()
+    spec = backup['spec']
+    if obj.mode != 'EDIT':
+        me.color_attributes[spec[0]].data.foreach_set(_foreach_property(spec), backup['data'])
         me.update()
-        try:
-            for area in bpy.context.screen.areas:
-                if area.type == 'VIEW_3D':
-                    area.tag_redraw()
-        except Exception:
-            pass
-        return True
-    except Exception as e:
-        #debug_print("_restore_col_from_memory: bmesh write failed:", e)
-        try:
-            if created_bm and bm is not None:
-                bm.free()
-        except Exception:
-            pass
-
-    #debug_print("_restore_col_from_memory: failed to restore for key", key)
-    return False
+    else:
+        bm = bmesh.from_edit_mesh(me)
+        _write_bmesh_colors(bm, spec, backup['data'])
+        _close_bmesh(obj, me, bm, False, True)
+    _redraw_3d_views()
+    return True
 
 def _clear_backup(obj, me):
-    global _PREVIEW_BACKUP
-    key = _make_key(obj, me)
-    if key in _PREVIEW_BACKUP:
-        del _PREVIEW_BACKUP[key]
-        #debug_print("_clear_backup: cleared key", key)
+    _PREVIEW_BACKUP.pop(_make_key(obj, me), None)
 
 # ------------------------------
 # Preview helpers: enable/disable
 # ------------------------------
 def _preview_enable(obj, me):
+    # A stale backup (from an object that previously lived at this address) is replaced.
+    if _backup_for(obj, me) is None:
+        _clear_backup(obj, me)
     try:
         _backup_col_in_memory(obj, me)
     except Exception as e:
-        debug_print("_preview_enable: backup ensure failed:", e)
-    try:
-        main_ca = get_or_create_color_attribute(me, "Col")
-        if main_ca:
-            for i, a in enumerate(me.attributes):
-                if a.name == main_ca.name:
-                    try:
-                        me.attributes.active_color_index = i
-                        me.attributes.active_color_name = main_ca.name
-                        me.attributes.render_color_index = i
-                    except Exception:
-                        pass
-                    break
-            try:
-                bpy.ops.geometry.color_attribute_render_set(name=main_ca.name)
-            except Exception:
-                pass
-    except Exception as e:
-        debug_print("_preview_enable: set active failed:", e)
-    try:
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
-    except Exception:
-        pass
-
+        debug_print("_preview_enable: backup failed:", e)
+    _redraw_3d_views()
 
 def _preview_disable(obj, me, clear_backup=True):
     try:
-        restored = _restore_col_from_memory(obj, me)
-        #debug_print("_preview_disable: restored:", restored, "key:", _make_key(obj, me))
+        _restore_col_from_memory(obj, me)
     except Exception as e:
         debug_print("_preview_disable: restore failed:", e)
     if clear_backup:
-        try:
-            _clear_backup(obj, me)
-            #debug_print("_preview_disable: backup cleared key:", _make_key(obj, me))
-        except Exception as e:
-            debug_print("_preview_disable: clear backup failed:", e)
-    try:
-        main_ca = get_existing_color_attribute(me, "Col")
-        if main_ca:
-            for i, a in enumerate(me.attributes):
-                if a.name == main_ca.name:
-                    try:
-                        me.attributes.active_color_index = i
-                        me.attributes.active_color_name = main_ca.name
-                        me.attributes.render_color_index = i
-                    except Exception:
-                        pass
-                    break
-            try:
-                bpy.ops.geometry.color_attribute_render_set(name=main_ca.name)
-            except Exception:
-                pass
-    except Exception as e:
-        debug_print("_preview_disable: set active failed:", e)
-    try:
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
-    except Exception:
-        pass
+        _clear_backup(obj, me)
+    _redraw_3d_views()
 
 # ------------------------------
 # Selection / weights
@@ -527,226 +259,131 @@ def detect_selection_mode(context):
     return 'FACE'
 
 def compute_vertex_weights_with_radius(bm, selected_vertices_idx, radius, iterations, falloff_power=1.0):
-    n = len(bm.verts)
-    INF = 10**9
-    dist = [INF] * n
+    """Returns {vertex index: weight} for every vertex with a non-zero weight.
+
+    Weights are non-zero only within `radius` edges of the selection, and each
+    smoothing iteration spreads them one more edge, so only that region is
+    visited. Sums run in link_edges order to match a full-mesh computation.
+    """
+    bm.verts.ensure_lookup_table()
+    verts = bm.verts
+    n = len(verts)
+    iterations = max(0, iterations)
+    max_depth = (int(radius) if radius > 0 else 0) + iterations
+
+    neighbors = {}
+    def neighbors_of(i):
+        result = neighbors.get(i)
+        if result is None:
+            v = verts[i]
+            result = neighbors[i] = [e.other_vert(v).index for e in v.link_edges]
+        return result
+
+    dist = {}
     dq = deque()
     for vi in selected_vertices_idx:
-        if 0 <= vi < n:
+        if 0 <= vi < n and vi not in dist:
             dist[vi] = 0
             dq.append(vi)
     while dq:
         v_idx = dq.popleft()
-        v = bm.verts[v_idx]
-        for e in v.link_edges:
-            other = e.other_vert(v)
-            oi = other.index
-            if dist[oi] > dist[v_idx] + 1:
-                dist[oi] = dist[v_idx] + 1
+        next_dist = dist[v_idx] + 1
+        if next_dist > max_depth:
+            continue
+        for oi in neighbors_of(v_idx):
+            if oi not in dist:
+                dist[oi] = next_dist
                 dq.append(oi)
-    weights = [0.0] * n
+
     if radius <= 0:
-        for i in range(n):
-            weights[i] = 1.0 if dist[i] == 0 else 0.0
+        weights = {i: (1.0 if d == 0 else 0.0) for i, d in dist.items()}
     else:
-        for i in range(n):
-            if dist[i] <= radius:
-                linear = dist[i] / max(1e-6, radius)
-                falloff = (1.0 - linear) ** falloff_power
-                weights[i] = max(0.0, falloff)
-            else:
-                weights[i] = 0.0
-    for _ in range(max(0, iterations)):
-        neww = weights.copy()
-        for v in bm.verts:
-            total = weights[v.index]
-            count = 1
-            for e in v.link_edges:
-                other = e.other_vert(v)
-                total += weights[other.index]
-                count += 1
-            if count > 0:
-                neww[v.index] = total / count
-        weights = neww
-    for i in range(len(weights)):
-        if weights[i] < 0.0: weights[i] = 0.0
-        if weights[i] > 1.0: weights[i] = 1.0
-    return weights
+        scale = max(1e-6, radius)
+        weights = {
+            i: (max(0.0, (1.0 - d / scale) ** falloff_power) if d <= radius else 0.0)
+            for i, d in dist.items()
+        }
+    region = list(dist)
+    for _ in range(iterations):
+        smoothed = {}
+        for i in region:
+            total = weights[i]
+            nb = neighbors_of(i)
+            for o in nb:
+                total += weights.get(o, 0.0)
+            smoothed[i] = total / (len(nb) + 1)
+        weights = smoothed
+    return {i: min(1.0, max(0.0, w)) for i, w in weights.items() if w > 0.0}
 
 # ------------------------------
-# Core: apply + diagnostics
+# Core: apply
 # ------------------------------
+def _blend(current, rgba, w):
+    return (
+        current[0] * (1.0 - w) + rgba[0] * w,
+        current[1] * (1.0 - w) + rgba[1] * w,
+        current[2] * (1.0 - w) + rgba[2] * w,
+        current[3] * (1.0 - w) + rgba[3] * w,
+    )
+
+def _selected_vertex_indices(bm, sel_mode):
+    if sel_mode == 'EDGE':
+        selected = set()
+        for e in bm.edges:
+            if e.select:
+                selected.add(e.verts[0].index)
+                selected.add(e.verts[1].index)
+        return list(selected)
+    return [v.index for v in bm.verts if v.select]
+
 def set_colors_on_mesh(context, rgba, radius, iterations, falloff_power, preview_mode=False):
     obj = context.object
     if not obj or obj.type != 'MESH':
-        #debug_print("No active mesh object.")
         return
 
     me = obj.data
-    main_name = "Col"
-
-    if preview_mode:
-        try:
-            restored = _restore_col_from_memory(obj, me)
-            #debug_print("set_colors_on_mesh: restored before apply:", restored, "key:", _make_key(obj, me))
-        except Exception as e:
-            debug_print("set_colors_on_mesh: restore before apply failed:", e)
-
-    ca = get_or_create_color_attribute(me, name=main_name)
+    ca = get_or_create_color_attribute(me, name=MAIN_ATTRIBUTE)
     if not ca:
-        #debug_print("No color attribute available.")
         return
+    spec = _attribute_spec(ca)
+    rgba = tuple(float(c) for c in rgba[:4])
 
-    #debug_print("Applying to attribute:", ca.name, "domain:", ca.domain, "preview:", preview_mode)
+    # Preview paints over the backup, so restoring and painting share one BMesh pass.
+    backup = _backup_for(obj, me) if preview_mode else None
 
-    was_edit = (obj.mode == 'EDIT')
-    if was_edit:
-        bm = bmesh.from_edit_mesh(me)
-    else:
-        bm = bmesh.new()
-        bm.from_mesh(me)
-    bm.verts.ensure_lookup_table()
-    bm.edges.ensure_lookup_table()
-    bm.faces.ensure_lookup_table()
-
-    domain = ca.domain
-
-    if domain == 'CORNER':
-        layer = bm.loops.layers.color.get(ca.name)
-        if layer is None:
-            layer = bm.loops.layers.color.new(ca.name)
+    bm, owned = _open_bmesh(obj, me)
+    try:
+        bm.verts.ensure_lookup_table()
+        if backup is not None:
+            _write_bmesh_colors(bm, backup['spec'], backup['data'])
+        layer = _bmesh_layer(bm, spec)
+        corner = spec[1] == 'CORNER'
         sel_mode = detect_selection_mode(context)
-        sel_verts = [v.index for v in bm.verts if v.select]
-        sel_edges = [e.index for e in bm.edges if e.select]
-        sel_faces = [f.index for f in bm.faces if f.select]
 
         if sel_mode == 'FACE':
-            if sel_faces:
-                for fi in sel_faces:
-                    face = bm.faces[fi]
-                    for loop in face.loops:
-                        loop[layer] = (float(rgba[0]), float(rgba[1]), float(rgba[2]), float(rgba[3]))
-                #debug_print("Wrote face colors to BMesh layer", ca.name)
+            selected_faces = [f for f in bm.faces if f.select]
+            for face in selected_faces:
+                for element in (face.loops if corner else face.verts):
+                    element[layer] = rgba
         else:
-            if sel_mode == 'EDGE':
-                if sel_edges:
-                    selected_vertices = set()
-                    for ei in sel_edges:
-                        e = bm.edges[ei]
-                        selected_vertices.add(e.verts[0].index)
-                        selected_vertices.add(e.verts[1].index)
-                    sel_verts_list = list(selected_vertices)
-                else:
-                    sel_verts_list = []
-            else:
-                sel_verts_list = sel_verts
-
-            if sel_verts_list:
-                weights = compute_vertex_weights_with_radius(bm, sel_verts_list, radius, iterations, falloff_power)
-                for face in bm.faces:
-                    for loop in face.loops:
-                        v_idx = loop.vert.index
-                        w = weights[v_idx]
-                        cur = loop[layer]
-                        cur_col = (float(cur[0]), float(cur[1]), float(cur[2]), float(cur[3]))
-                        res = (
-                            cur_col[0] * (1.0 - w) + float(rgba[0]) * w,
-                            cur_col[1] * (1.0 - w) + float(rgba[1]) * w,
-                            cur_col[2] * (1.0 - w) + float(rgba[2]) * w,
-                            cur_col[3] * (1.0 - w) + float(rgba[3]) * w,
-                        )
-                        loop[layer] = res
-                #debug_print("Wrote blended loop colors to BMesh layer", ca.name)
-
-    elif domain == 'POINT':
-        layer = bm.verts.layers.color.get(ca.name)
-        if layer is None:
-            layer = bm.verts.layers.color.new(ca.name)
-        sel_mode = detect_selection_mode(context)
-        sel_verts = [v.index for v in bm.verts if v.select]
-        sel_edges = [e.index for e in bm.edges if e.select]
-        sel_faces = [f.index for f in bm.faces if f.select]
-
-        if sel_mode == 'FACE':
-            if sel_faces:
-                for fi in sel_faces:
-                    face = bm.faces[fi]
-                    for vert in face.verts:
-                        vert[layer] = (float(rgba[0]), float(rgba[1]), float(rgba[2]), float(rgba[3]))
-                #debug_print("Wrote face->vertex colors to BMesh layer", ca.name)
-        else:
-            if sel_mode == 'EDGE':
-                if sel_edges:
-                    selected_vertices = set()
-                    for ei in sel_edges:
-                        e = bm.edges[ei]
-                        selected_vertices.add(e.verts[0].index)
-                        selected_vertices.add(e.verts[1].index)
-                    sel_verts_list = list(selected_vertices)
-                else:
-                    sel_verts_list = []
-            else:
-                sel_verts_list = sel_verts
-
-            if sel_verts_list:
-                weights = compute_vertex_weights_with_radius(bm, sel_verts_list, radius, iterations, falloff_power)
-                for vert in bm.verts:
-                    v_idx = vert.index
-                    w = weights[v_idx]
-                    cur = vert[layer]
-                    cur_col = (float(cur[0]), float(cur[1]), float(cur[2]), float(cur[3]))
-                    res = (
-                        cur_col[0] * (1.0 - w) + float(rgba[0]) * w,
-                        cur_col[1] * (1.0 - w) + float(rgba[1]) * w,
-                        cur_col[2] * (1.0 - w) + float(rgba[2]) * w,
-                        cur_col[3] * (1.0 - w) + float(rgba[3]) * w,
-                    )
-                    vert[layer] = res
-                #debug_print("Wrote blended vertex colors to BMesh layer", ca.name)
-    else:
-        #debug_print("Unsupported attribute domain:", domain)
-        if not (obj.mode == 'EDIT'):
-            try:
-                bm.free()
-            except Exception:
-                pass
-        return
-
-    if obj.mode == 'EDIT':
-        bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
-    else:
-        bm.to_mesh(me)
-        bm.free()
-    me.update()
-
-    try:
-        idx = None
-        for i, a in enumerate(me.attributes):
-            if a.name == main_name:
-                idx = i
-                break
-        if idx is not None:
-            try:
-                me.attributes.active_color_index = idx
-                me.attributes.active_color_name = main_name
-                me.attributes.render_color_index = idx
-            except Exception:
-                pass
-        try:
-            bpy.ops.geometry.color_attribute_render_set(name=main_name)
-        except Exception:
-            pass
+            selected = _selected_vertex_indices(bm, sel_mode)
+            if selected:
+                weights = compute_vertex_weights_with_radius(bm, selected, radius, iterations, falloff_power)
+                verts = bm.verts
+                for v_idx, w in weights.items():
+                    vert = verts[v_idx]
+                    if corner:
+                        for loop in vert.link_loops:
+                            loop[layer] = _blend(loop[layer], rgba, w)
+                    else:
+                        vert[layer] = _blend(vert[layer], rgba, w)
     except Exception:
-        pass
+        _close_bmesh(obj, me, bm, owned, False)
+        raise
+    _close_bmesh(obj, me, bm, owned, True)
 
-    try:
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
-    except Exception:
-        pass
-
-    #debug_print("Apply finished. Showing attribute:", main_name)
+    activate_color_attribute(me, me.color_attributes[spec[0]])
+    _redraw_3d_views()
 
 # ------------------------------
 # UI / props / operator
@@ -807,11 +444,7 @@ class PIGMI_OT_use_palette_color(Operator):
         props = sc.pigmi_props
         if 0 <= self.idx < len(sc.pigmi_palette):
             rgba = tuple(sc.pigmi_palette[self.idx].color)
-            # set main color (updates sliders)
-            try:
-                props.color = rgba
-            except Exception:
-                pass
+            _set_color_silently(props, rgba)
             # apply to selection immediately (respect preview_mode)
             try:
                 set_colors_on_mesh(context, rgba, radius=0.0, iterations=0, falloff_power=1.0, preview_mode=props.preview_mode)
@@ -834,7 +467,7 @@ class PIGMI_OT_apply_color(Operator):
         props = context.scene.pigmi_props
         rgba = tuple(props.color)
         set_colors_on_mesh(context, rgba, props.radius, props.iterations, props.falloff_power, props.preview_mode)
-        self.report({'INFO'}, "Pigmi: Color applied (check system console for diagnostics)")
+        self.report({'INFO'}, "Pigmi: Color applied")
         return {'FINISHED'}
 
 # Operator: Save (commit preview)
@@ -854,60 +487,17 @@ class PIGMI_OT_commit_preview(Operator):
         props = context.scene.pigmi_props
 
         try:
-            if obj.mode == 'EDIT':
-                try:
-                    bm_edit = bmesh.from_edit_mesh(me)
-                    bmesh.update_edit_mesh(me, loop_triangles=False, destructive=False)
-                except Exception as e:
-                    debug_print("commit_preview: flush editmesh failed:", e)
-            else:
-                try:
-                    me.update()
-                except Exception as e:
-                    debug_print("commit_preview: me.update failed:", e)
-        except Exception as e:
-            debug_print("commit_preview: ensure mesh up-to-date failed:", e)
-
-        try:
             _overwrite_backup_with_current(obj, me)
-            #debug_print("commit_preview: backup overwritten for key:", _make_key(obj, me))
         except Exception as e:
-            #debug_print("commit_preview: _overwrite_backup_with_current failed:", e)
+            debug_print("commit_preview: backup failed:", e)
             self.report({'WARNING'}, "Pigmi: Failed to overwrite preview backup (see console).")
-            return {'CANCELLED'}
-
-        try:
-            ok = _restore_col_from_memory(obj, me)
-            #debug_print("commit_preview: restore after overwrite returned:", ok, "key:", _make_key(obj, me))
-        except Exception as e:
-            #debug_print("commit_preview: restore after overwrite failed:", e)
-            self.report({'WARNING'}, "Pigmi: Failed to restore after backup (see console).")
             return {'CANCELLED'}
 
         try:
             props.preview_mode = True
         except Exception:
             pass
-
-        try:
-            main_ca = get_existing_color_attribute(me, "Col")
-            if main_ca:
-                for i, a in enumerate(me.attributes):
-                    if a.name == main_ca.name:
-                        me.attributes.active_color_index = i
-                        me.attributes.active_color_name = main_ca.name
-                        me.attributes.render_color_index = i
-                        break
-                try:
-                    bpy.ops.geometry.color_attribute_render_set(name=main_ca.name)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
+        _redraw_3d_views()
 
         self.report({'INFO'}, "Pigmi: Preview committed — backup synced with mesh.")
         return {'FINISHED'}
@@ -924,9 +514,6 @@ class PIGMI_OT_cancel_preview(Operator):
         obj = context.object
         me = obj.data
         restored = _restore_col_from_memory(obj, me)
-        for area in context.screen.areas:
-            if area.type == 'VIEW_3D':
-                area.tag_redraw()
         if restored:
             self.report({'INFO'}, "Pigmi: Preview restored from backup.")
         else:
@@ -945,11 +532,7 @@ class PIGMI_OT_fill_all(Operator):
     def execute(self, context):
         props = context.scene.pigmi_props
         rgba = tuple(self.color)
-        # also update main color sliders
-        try:
-            props.color = rgba
-        except Exception:
-            pass
+        _set_color_silently(props, rgba)
         obj = context.object
         if not obj or obj.type != 'MESH':
             self.report({'WARNING'}, "Pigmi: No mesh to fill.")
@@ -958,37 +541,40 @@ class PIGMI_OT_fill_all(Operator):
         try:
             set_colors_on_mesh(context, rgba, radius=0.0, iterations=0, falloff_power=1.0, preview_mode=props.preview_mode)
         except Exception as e:
-            #debug_print("fill_all: set_colors_on_mesh failed:", e)
+            debug_print("fill_all: set_colors_on_mesh failed:", e)
             self.report({'WARNING'}, "Pigmi: Fill failed (see console)")
             return {'CANCELLED'}
         self.report({'INFO'}, "Pigmi: Filled selection")
         return {'FINISHED'}
 
+def _set_color_silently(props, rgba):
+    global _SUPPRESS_PARAM_UPDATE
+    _SUPPRESS_PARAM_UPDATE = True
+    try:
+        props.color = rgba
+    except Exception:
+        pass
+    finally:
+        _SUPPRESS_PARAM_UPDATE = False
+
 def pigmi_param_update(self, context):
-    props = context.scene.pigmi_props
-    if not context.object or context.object.type != 'MESH':
+    if _SUPPRESS_PARAM_UPDATE:
         return
-    rgba = tuple(props.color)
-    if props.preview_mode:
-        if props.auto_apply:
-            set_colors_on_mesh(context, rgba, props.radius, props.iterations, props.falloff_power, preview_mode=True)
-    else:
-        if props.auto_apply:
-            set_colors_on_mesh(context, rgba, props.radius, props.iterations, props.falloff_power, preview_mode=False)
+    props = context.scene.pigmi_props
+    if not props.auto_apply or not context.object or context.object.type != 'MESH':
+        return
+    set_colors_on_mesh(context, tuple(props.color), props.radius, props.iterations, props.falloff_power, preview_mode=props.preview_mode)
 
 def pigmi_preview_toggle(self, context):
     props = context.scene.pigmi_props
     obj = context.object
     if not obj or obj.type != 'MESH':
-        #debug_print("pigmi_preview_toggle: no active mesh")
         return
     me = obj.data
     if props.preview_mode:
         _preview_enable(obj, me)
-        #debug_print("Preview enabled; backup key:", _make_key(obj, me))
     else:
         _preview_disable(obj, me, clear_backup=True)
-        #debug_print("Preview disabled; restored and cleared key:", _make_key(obj, me))
 
 # ------------------------------
 # UI Panel
