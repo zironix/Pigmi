@@ -20,7 +20,11 @@ registerIpcHandlers({
   shell,
 });
 const mcpIntegration = createMcpIntegration({ app, ipcMain, getMainWindow: () => mainWindow });
-const blenderAddon = createBlenderAddonIntegration({ app, ipcMain });
+const blenderAddon = createBlenderAddonIntegration({
+  app,
+  ipcMain,
+  fetchImpl: (...args) => net.fetch(...args),
+});
 
 app.whenReady().then(async () => {
   blenderAddon

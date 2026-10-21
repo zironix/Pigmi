@@ -1453,7 +1453,34 @@ body {
   gap: 8px;
   text-align: center;
 }
-#app-window .addon-status ul {
+#app-window .addons-section {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+#app-window .addons-section > .addon-card {
+  margin-top: 0;
+}
+#app-window .addon-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 32px;
+}
+#app-window .addon-entry > div:first-child {
+  flex: 1;
+}
+#app-window .texture-page .addon-entry p {
+  margin: 0 0 6px;
+}
+#app-window .texture-page .addon-location {
+  color: var(--studio-link);
+  font-size: 11px;
+}
+#app-window .addon-version {
+  color: var(--studio-muted);
+  font-size: 11px;
+}
+#app-window ul.addon-status {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 6px;
@@ -1461,7 +1488,7 @@ body {
   padding: 0;
   list-style: none;
 }
-#app-window .addon-status li {
+#app-window ul.addon-status li {
   display: flex;
   justify-content: space-between;
   gap: 10px;
@@ -1555,7 +1582,8 @@ body {
   #app-window .guide-grid {
     grid-template-columns: 1fr;
   }
-  #app-window .addon-card {
+  #app-window .addon-card,
+  #app-window .addon-entry {
     align-items: flex-start;
     flex-direction: column;
     gap: 12px;

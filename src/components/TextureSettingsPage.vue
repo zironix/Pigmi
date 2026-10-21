@@ -6,37 +6,84 @@ const ADDON_STATES = {
   missing: 'Not installed',
   outdated: 'Update available',
   current: 'Up to date',
-  newer: 'Newer than bundled',
+  newer: 'Newer than source',
 };
-const addon = ref(null);
+// Display copy for each add-on id the main process reports, in its order.
+const ADDON_DETAILS = {
+  uv2palette: {
+    title: 'UV to Palette',
+    description:
+      'Map selected UVs onto Pigmi palette cells, or distribute them along gradients with drawn paths, radial mapping and distance. Includes cell margins and cavity / fake AO controls.',
+    location: 'Panel: 3D View sidebar → Snap UV',
+  },
+  highlighter: {
+    title: 'Highlighter',
+    description:
+      'Paint vertex colors from a reusable palette with quick white, black and transparent fills. Preview changes, then Save to commit or Restore to discard them.',
+    location: 'Panel: 3D View sidebar → Tool',
+  },
+  face2face: {
+    title: 'Face to Face',
+    description:
+      'Save a selected mesh part relative to a base face or edge and attach copies to target elements, with rotation, flip and scale adjustable afterwards.',
+    location: 'Panel: 3D View sidebar → Tool',
+  },
+};
+const addonStatus = ref(null);
 const addonBusy = ref(false);
 const addonMessage = ref('');
 const formatVersion = (version) => (Array.isArray(version) ? version.join('.') : '—');
+const addonTitle = (addon) => ADDON_DETAILS[addon.id]?.title || addon.name;
+const addonSourceUrl = (addon) =>
+  `https://github.com/zironix/Pigmi/blob/main/Pigmi%20Helpers/${encodeURIComponent(addon.fileName)}`;
 
 function errorMessage(error) {
   // Electron prefixes errors from the main process with the IPC method name.
   return String(error?.message || error).replace(/^Error invoking remote method '[^']+': /, '');
 }
 
-async function refreshAddon() {
+async function refreshAddons() {
   try {
-    addon.value = await window.electronAPI?.getBlenderAddonStatus?.();
+    addonStatus.value = await window.electronAPI?.getBlenderAddonStatus?.();
   } catch (error) {
     addonMessage.value = errorMessage(error);
   }
 }
 
-async function installAddon() {
+function describeInstall(addon) {
+  const title = addonTitle(addon);
+  if (addon.error) return `${title}: ${addon.error}.`;
+  const parts = [];
+  if (addon.updated.length) {
+    parts.push(
+      `${title} v${formatVersion(addon.sourceVersion)} → Blender ${addon.updated.join(', ')}.`,
+    );
+  }
+  if (addon.failed.length) {
+    parts.push(
+      `${title}: could not write to Blender ${addon.failed.map((entry) => entry.blenderVersion).join(', ')}.`,
+    );
+  }
+  if (addon.downloadError) {
+    parts.push(
+      `${title}: GitHub is unavailable (${addon.downloadError}); used the ${addon.source === 'github' ? 'last downloaded' : 'bundled'} copy.`,
+    );
+  }
+  return parts.join(' ');
+}
+
+async function installAddons() {
   addonBusy.value = true;
   addonMessage.value = '';
   try {
     const result = await window.electronAPI.installBlenderAddon();
-    addon.value = result;
-    addonMessage.value = result.failed.length
-      ? `Could not write to Blender ${result.failed.map((entry) => entry.blenderVersion).join(', ')}.`
-      : result.updated.length
-        ? `Installed in Blender ${result.updated.join(', ')}. Restart Blender to load it.`
-        : 'Every Blender version already has the current add-on.';
+    addonStatus.value = result;
+    const details = result.addons.map(describeInstall).filter(Boolean).join(' ');
+    const updated = result.addons.some((addon) => addon.updated?.length);
+    addonMessage.value =
+      details && updated
+        ? `${details} Restart Blender to load the updates.`
+        : details || 'Every Blender version already has the latest add-ons.';
   } catch (error) {
     addonMessage.value = errorMessage(error);
   } finally {
@@ -48,7 +95,7 @@ async function setAutoUpdate(event) {
   const enabled = event.target.checked;
   try {
     await window.electronAPI.setBlenderAddonAutoUpdate(enabled);
-    addon.value = { ...addon.value, autoUpdate: enabled };
+    addonStatus.value = { ...addonStatus.value, autoUpdate: enabled };
   } catch (error) {
     event.target.checked = !enabled;
     addonMessage.value = errorMessage(error);
@@ -72,7 +119,7 @@ async function copyCardNumber() {
   }, 2000);
 }
 
-onMounted(refreshAddon);
+onMounted(refreshAddons);
 onBeforeUnmount(() => clearTimeout(cardCopiedTimer));
 const shortcuts = [
   [
@@ -120,7 +167,7 @@ const shortcuts = [
         <nav aria-label="Settings sections">
           <a href="#document-controls">Document settings</a>
           <a href="#workflow-guide">Shortcuts & tips</a>
-          <a href="#uv-addon">Blender add-on</a>
+          <a href="#blender-addons">Blender add-ons</a>
           <a href="#support">Support Pigmi</a>
         </nav>
       </header>
@@ -194,22 +241,48 @@ const shortcuts = [
           </article>
         </div>
       </section>
-      <section id="uv-addon" class="guide-card addon-card">
-        <div>
-          <span class="page-eyebrow">BLENDER · PIGMI HELPERS</span>
-          <h2>UV to Palette</h2>
-          <p>
-            Map selected UVs onto Pigmi palette cells, or distribute them along gradients with drawn
-            paths, radial mapping and distance. Includes cell margins and cavity / fake AO controls.
-          </p>
-          <p>
-            Pigmi installs the add-on into every Blender version on this computer and keeps it
-            updated. After the first install, restart Blender and enable
-            <strong>Pigmi: UV to Palette</strong> once in Preferences → Add-ons; updates keep it
-            enabled. Its panel appears in the 3D View sidebar under <strong>Snap UV</strong>.
-          </p>
-          <div v-if="addon" class="addon-status">
-            <ul v-if="addon.installations.length">
+      <section id="blender-addons" class="addons-section">
+        <div class="guide-card addon-card">
+          <div>
+            <span class="page-eyebrow">BLENDER · PIGMI HELPERS</span>
+            <h2>Blender add-ons</h2>
+            <p>
+              Pigmi downloads the latest add-ons from GitHub, installs them into every Blender
+              version on this computer and keeps them updated, independently of Pigmi releases.
+              After the first install, restart Blender and enable each add-on once in Preferences →
+              Add-ons; updates keep it enabled.
+            </p>
+            <label v-if="addonStatus" class="addon-auto">
+              <input type="checkbox" :checked="addonStatus.autoUpdate" @change="setAutoUpdate" />
+              Install and update automatically when Pigmi starts
+            </label>
+            <p v-if="addonMessage" class="addon-message" role="status">{{ addonMessage }}</p>
+          </div>
+          <div class="addon-actions">
+            <button
+              type="button"
+              class="addon-link"
+              :disabled="addonBusy || !addonStatus"
+              @click="installAddons"
+            >
+              {{ addonBusy ? 'Checking GitHub…' : 'Check & install all' }}
+            </button>
+          </div>
+        </div>
+        <p v-if="addonStatus && !addonStatus.addons.some((addon) => addon.installations.length)">
+          No Blender settings were found in <code>{{ addonStatus.configRoot }}</code
+          >. Start Blender once, then install again.
+        </p>
+        <article
+          v-for="addon in addonStatus?.addons || []"
+          :key="addon.id"
+          class="guide-card addon-entry"
+        >
+          <div>
+            <h3>{{ addonTitle(addon) }}</h3>
+            <p>{{ ADDON_DETAILS[addon.id]?.description }}</p>
+            <p class="addon-location">{{ ADDON_DETAILS[addon.id]?.location }}</p>
+            <ul v-if="addon.installations.length" class="addon-status">
               <li v-for="entry in addon.installations" :key="entry.blenderVersion">
                 <span>Blender {{ entry.blenderVersion }}</span>
                 <span :class="['addon-state', entry.state]">
@@ -220,35 +293,22 @@ const shortcuts = [
                 </span>
               </li>
             </ul>
-            <p v-else>
-              No Blender settings were found in <code>{{ addon.configRoot }}</code
-              >. Start Blender once, then install again.
-            </p>
-            <label class="addon-auto">
-              <input type="checkbox" :checked="addon.autoUpdate" @change="setAutoUpdate" />
-              Install and update automatically when Pigmi starts
-            </label>
+            <p v-if="addon.error" class="addon-message">{{ addon.error }}</p>
           </div>
-          <p v-if="addonMessage" class="addon-message" role="status">{{ addonMessage }}</p>
-        </div>
-        <div class="addon-actions">
-          <button
-            type="button"
-            class="addon-link"
-            :disabled="addonBusy || !addon"
-            @click="installAddon"
-          >
-            {{ addonBusy ? 'Installing…' : 'Install / update now' }}
-            <small v-if="addon">v{{ formatVersion(addon.bundledVersion) }}</small>
-          </button>
-          <a
-            class="addon-link"
-            href="https://github.com/zironix/Pigmi/blob/main/Pigmi%20Helpers/pigmi_uv2palette.py"
-            target="_blank"
-            rel="noopener noreferrer"
-            >Source on GitHub ↗</a
-          >
-        </div>
+          <div class="addon-actions">
+            <span v-if="addon.sourceVersion" class="addon-version"
+              >v{{ formatVersion(addon.sourceVersion) }} ·
+              {{ addon.source === 'github' ? 'GitHub' : 'bundled' }}</span
+            >
+            <a
+              class="addon-link"
+              :href="addonSourceUrl(addon)"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Source on GitHub ↗</a
+            >
+          </div>
+        </article>
       </section>
       <section id="support" class="guide-card support-card">
         <div class="support-intro">

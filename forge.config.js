@@ -14,6 +14,8 @@ module.exports = {
     extraResource: [
       path.join(__dirname, 'build', 'mcp'),
       path.join(__dirname, 'Pigmi Helpers', 'pigmi_uv2palette.py'),
+      path.join(__dirname, 'Pigmi Helpers', 'pigmi_highlighter.py'),
+      path.join(__dirname, 'Pigmi Helpers', 'pigmi_face2face.py'),
       path.join(__dirname, 'LICENSE'),
       path.join(__dirname, 'THIRD_PARTY_NOTICES.md'),
     ],

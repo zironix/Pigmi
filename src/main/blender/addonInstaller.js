@@ -2,7 +2,6 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const ADDON_FILE_NAME = 'pigmi_uv2palette.py';
 const BLENDER_VERSION_DIRECTORY = /^\d+\.\d+$/;
 
 /**
@@ -66,46 +65,48 @@ async function readInstalledVersion(filePath) {
   }
 }
 
-function addonPath(configRoot, blenderVersion) {
-  return path.join(configRoot, blenderVersion, 'scripts', 'addons', ADDON_FILE_NAME);
+function addonPath(configRoot, blenderVersion, fileName) {
+  return path.join(configRoot, blenderVersion, 'scripts', 'addons', fileName);
 }
 
-function addonState(installed, bundled) {
+function addonState(installed, source) {
   if (!installed) return 'missing';
-  const order = compareVersions(installed, bundled);
+  const order = compareVersions(installed, source);
   return order < 0 ? 'outdated' : order > 0 ? 'newer' : 'current';
 }
 
-export async function getAddonStatus({ configRoot, sourcePath }) {
-  const bundledVersion = parseAddonVersion(await fs.readFile(sourcePath, 'utf8'));
-  if (!bundledVersion) throw new Error('The bundled UV to Palette add-on has no version');
+export async function getAddonStatus({ configRoot, sourcePath, fileName }) {
+  const sourceVersion = parseAddonVersion(await fs.readFile(sourcePath, 'utf8'));
+  if (!sourceVersion) throw new Error(`${fileName} has no bl_info version`);
   const blenderVersions = await findBlenderVersions(configRoot);
   const installations = await Promise.all(
     blenderVersions.map(async (blenderVersion) => {
-      const installedVersion = await readInstalledVersion(addonPath(configRoot, blenderVersion));
+      const installedVersion = await readInstalledVersion(
+        addonPath(configRoot, blenderVersion, fileName),
+      );
       return {
         blenderVersion,
         installedVersion,
-        state: addonState(installedVersion, bundledVersion),
+        state: addonState(installedVersion, sourceVersion),
       };
     }),
   );
-  return { configRoot, bundledVersion, installations };
+  return { configRoot, sourceVersion, installations };
 }
 
 /**
- * Installs the bundled add-on into every detected Blender version that lacks it
+ * Installs the add-on at sourcePath into every detected Blender version that lacks it
  * or has an older copy. A newer copy (for example a development build) is kept.
  * Blender keeps an add-on enabled across updates because the module name stays.
  */
-export async function installAddon({ configRoot, sourcePath }) {
+export async function installAddon({ configRoot, sourcePath, fileName }) {
   const source = await fs.readFile(sourcePath);
-  const status = await getAddonStatus({ configRoot, sourcePath });
+  const status = await getAddonStatus({ configRoot, sourcePath, fileName });
   const updated = [];
   const failed = [];
   for (const installation of status.installations) {
     if (installation.state !== 'missing' && installation.state !== 'outdated') continue;
-    const target = addonPath(configRoot, installation.blenderVersion);
+    const target = addonPath(configRoot, installation.blenderVersion, fileName);
     try {
       await fs.mkdir(path.dirname(target), { recursive: true });
       // Write beside the target and rename so Blender never reads a partial file.
@@ -117,5 +118,5 @@ export async function installAddon({ configRoot, sourcePath }) {
       failed.push({ blenderVersion: installation.blenderVersion, message: error.message });
     }
   }
-  return { ...(await getAddonStatus({ configRoot, sourcePath })), updated, failed };
+  return { ...(await getAddonStatus({ configRoot, sourcePath, fileName })), updated, failed };
 }

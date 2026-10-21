@@ -110,7 +110,9 @@ in A**. See [export details](docs/editor-guide.md#pbr-materials-and-export) for 
 ## Blender add-ons
 
 [Pigmi Helpers](Pigmi%20Helpers) contains three optional Blender add-ons for working with palette
-textures, vertex colors, and mesh parts. Each is a separate Python file.
+textures, vertex colors, and mesh parts. Each is a separate Python file. Pigmi downloads the latest
+versions from this repository's main branch and installs them into every Blender version on the
+computer (Settings → Blender add-ons); enable each add-on once in Blender's preferences.
 
 ### UV to Palette
 

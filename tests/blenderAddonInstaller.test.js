@@ -5,13 +5,13 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  ADDON_FILE_NAME,
   blenderConfigRoot,
   getAddonStatus,
   installAddon,
   parseAddonVersion,
 } from '../src/main/blender/addonInstaller';
 
+const ADDON_FILE_NAME = 'pigmi_uv2palette.py';
 const addonSource = (version) =>
   `bl_info = {\n    "name": "Pigmi: UV to Palette",\n    "version": (${version.join(', ')}),\n}\n`;
 
@@ -64,7 +64,7 @@ describe('Blender add-on installer', () => {
     await writeInstalled('4.5', [1, 19, 2]);
     await writeInstalled('5.0', [2, 0, 0]);
 
-    const before = await getAddonStatus({ configRoot, sourcePath });
+    const before = await getAddonStatus({ configRoot, sourcePath, fileName: ADDON_FILE_NAME });
     expect(
       before.installations.map(({ blenderVersion, state }) => [blenderVersion, state]),
     ).toEqual([
@@ -74,7 +74,7 @@ describe('Blender add-on installer', () => {
       ['5.0', 'newer'],
     ]);
 
-    const result = await installAddon({ configRoot, sourcePath });
+    const result = await installAddon({ configRoot, sourcePath, fileName: ADDON_FILE_NAME });
 
     expect(result.updated).toEqual(['3.6', '4.2']);
     expect(result.failed).toEqual([]);
@@ -92,7 +92,7 @@ describe('Blender add-on installer', () => {
   });
 
   it('reports no installations when Blender has never run', async () => {
-    const result = await installAddon({ configRoot, sourcePath });
+    const result = await installAddon({ configRoot, sourcePath, fileName: ADDON_FILE_NAME });
     expect(result.installations).toEqual([]);
     expect(result.updated).toEqual([]);
   });

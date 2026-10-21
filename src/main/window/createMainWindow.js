@@ -5,6 +5,8 @@ import { shouldShowEditContextMenu } from './contextMenu';
 // Only these fixed pages may leave the app; every other window.open is denied.
 const EXTERNAL_LINKS = new Set([
   'https://github.com/zironix/Pigmi/blob/main/Pigmi%20Helpers/pigmi_uv2palette.py',
+  'https://github.com/zironix/Pigmi/blob/main/Pigmi%20Helpers/pigmi_highlighter.py',
+  'https://github.com/zironix/Pigmi/blob/main/Pigmi%20Helpers/pigmi_face2face.py',
   'https://www.donationalerts.com/r/zenoxus',
   'https://t.me/godot3d',
   'https://t.me/zironix',
