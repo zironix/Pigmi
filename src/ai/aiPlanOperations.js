@@ -17,6 +17,25 @@ import {
   tokenList,
 } from './aiPlanShared';
 
+const nonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
+const nonEmptyArray = (value) => Array.isArray(value) && value.length > 0;
+
+// Exclusions only narrow a selection; an otherwise empty target must not mean "every item".
+export function hasItemSelector(target) {
+  return Boolean(
+    target?.all === true ||
+    target?.selected === true ||
+    (target?.id !== undefined && target.id !== null) ||
+    nonEmptyArray(target?.ids) ||
+    nonEmptyString(target?.name) ||
+    nonEmptyString(target?.folderPath) ||
+    nonEmptyString(target?.path) ||
+    nonEmptyArray(target?.nameIncludes) ||
+    nonEmptyArray(target?.folderPathIncludes) ||
+    (typeof target?.query === 'string' && tokenList(target.query).length > 0),
+  );
+}
+
 export function resolveTargetItems(texture, selectionIds, target, layers) {
   const items = Array.isArray(texture?.items) ? texture.items : [];
   const itemFolderMap = new Map();
@@ -29,6 +48,7 @@ export function resolveTargetItems(texture, selectionIds, target, layers) {
     }
     return [];
   }
+  if (!hasItemSelector(target)) return [];
 
   let filtered = items.slice();
 
@@ -110,9 +130,7 @@ export function resolveTargetItems(texture, selectionIds, target, layers) {
         })
         .filter((entry) => entry.score > 0)
         .sort((a, b) => b.score - a.score);
-      if (scored.length) {
-        filtered = scored.map((entry) => entry.item);
-      }
+      filtered = scored.map((entry) => entry.item);
     }
   }
 
@@ -416,9 +434,17 @@ export function createDefaultItemTemplate({
     roughness: clamp(toNumber(material.roughness, 50), 0, 100),
     metallic: clamp(toNumber(material.metallic, 0), 0, 100),
     emission: toNumber(material.emission, 0) ? 1 : 0,
-    emission_strength: clamp(toNumber(material.emissionStrength, 100), 0, 100),
+    emission_strength: clamp(
+      toNumber(material.emissionStrength ?? material.emission_strength, 100),
+      0,
+      100,
+    ),
     clearcoat: clamp(toNumber(material.clearcoat, 0), 0, 100),
-    clearcoat_roughness: clamp(toNumber(material.clearcoatRoughness, 0), 0, 100),
+    clearcoat_roughness: clamp(
+      toNumber(material.clearcoatRoughness ?? material.clearcoat_roughness, 0),
+      0,
+      100,
+    ),
     visible: true,
     selected: false,
   };
@@ -620,37 +646,4 @@ export function moveLayerItemNodeToFolder({ layers, itemId, folderPath, nextLaye
   }
   folder.childs.unshift(node);
   return true;
-}
-
-export function collectFolderPaths(nodes, currentPath, acc) {
-  if (!Array.isArray(nodes)) return;
-  nodes.forEach((node) => {
-    if (!node || typeof node !== 'object') return;
-    if (node.type === 'folder') {
-      const folderName = String(node.name || '').trim();
-      const nextPath = folderName
-        ? currentPath
-          ? `${currentPath}/${folderName}`
-          : folderName
-        : currentPath;
-      if (nextPath) acc.push(nextPath);
-      collectFolderPaths(node.childs, nextPath, acc);
-      return;
-    }
-    if (Array.isArray(node.childs) && node.childs.length) {
-      collectFolderPaths(node.childs, currentPath, acc);
-    }
-  });
-}
-
-export function collectRelativeSubfolderPaths(folderNode, currentRelPath, acc) {
-  if (!folderNode || !Array.isArray(folderNode.childs)) return;
-  folderNode.childs.forEach((child) => {
-    if (!child || child.type !== 'folder') return;
-    const name = String(child.name || '').trim();
-    if (!name) return;
-    const rel = currentRelPath ? `${currentRelPath}/${name}` : name;
-    acc.push(rel);
-    collectRelativeSubfolderPaths(child, rel, acc);
-  });
 }

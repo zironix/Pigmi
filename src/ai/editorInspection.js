@@ -15,6 +15,7 @@ import {
 
 const MAX_FOLDER_SNAPSHOTS = 8;
 const MAX_FOLDER_SNAPSHOT_ITEMS = 300;
+const MAX_DIAGNOSTIC_ISSUES = 100;
 
 function findFolderByPath(nodes, wantedPath, currentPath = '') {
   if (!Array.isArray(nodes)) return null;
@@ -68,7 +69,6 @@ export function buildFolderSnapshots({ texture, paths, fields = [], includeItemI
       if (node?.type === 'folder') {
         return {
           id: node.id,
-          name,
           kind: 'folder',
           relativePath,
           children: (Array.isArray(node.childs) ? node.childs : [])
@@ -88,7 +88,6 @@ export function buildFolderSnapshots({ texture, paths, fields = [], includeItemI
       const item = itemById.get(idKey(node.id));
       const treeEntry = {
         id: node.id,
-        name,
         kind: 'item',
         itemType: item?.type || null,
         relativePath,
@@ -101,7 +100,6 @@ export function buildFolderSnapshots({ texture, paths, fields = [], includeItemI
       const details = serializeItemDetails(item, itemFolderMap, requestedFields);
       delete details.name;
       delete details.path;
-      delete details.folderPath;
       if (requestedFields.size > 0 || includeItemIndex) {
         folderItems.push({ ...details, id: node.id, relativePath });
       }
@@ -128,10 +126,6 @@ export function buildFolderSnapshots({ texture, paths, fields = [], includeItemI
     missingPaths,
     ignoredPaths,
     truncated: state.truncated,
-    limits: {
-      maxFolders: MAX_FOLDER_SNAPSHOTS,
-      maxItems: MAX_FOLDER_SNAPSHOT_ITEMS,
-    },
   };
 }
 
@@ -140,7 +134,6 @@ function comparableItem(item) {
   delete details.id;
   delete details.name;
   delete details.path;
-  delete details.folderPath;
   delete details.relativePath;
   return details;
 }
@@ -202,24 +195,55 @@ export function compareFolderSnapshots({ texture, paths, fields = [], compact = 
         })),
       };
     });
+  const structurallyEquivalent =
+    snapshot.folders.length > 0 &&
+    snapshot.missingPaths.length === 0 &&
+    snapshot.ignoredPaths.length === 0 &&
+    snapshot.folders.every((folder) => folder.complete) &&
+    structure.every((entry) => entry.missingIn.length === 0);
+  const placements = snapshot.folders.map((folder) => ({
+    path: folder.path,
+    bounds: folder.bounds,
+  }));
+
+  if (compact) {
+    // presentIn is comparedPaths minus missingIn, and complete entries add nothing
+    // beyond the role list, so compact output lists only the differences.
+    return {
+      comparedPaths: folderPaths,
+      structurallyEquivalent,
+      placements,
+      structure: structure.filter((entry) => entry.missingIn.length),
+      roles: comparisons.map((role) => {
+        const compactRole = omitKey(role, 'presentIn');
+        if (!role.missingIn.length) delete compactRole.missingIn;
+        return shareCommonValues(compactRole);
+      }),
+      valueFormat:
+        'Merge each role.shared with each role.values entry. A role is present in every compared path except missingIn; structure lists only incomplete entries.',
+      missingPaths: snapshot.missingPaths,
+      ignoredPaths: snapshot.ignoredPaths,
+      truncated: snapshot.truncated,
+    };
+  }
 
   return {
     requestedPaths: (Array.isArray(paths) ? paths : []).map(normalizePathLike).filter(Boolean),
     comparedPaths: folderPaths,
-    structurallyEquivalent:
-      snapshot.folders.length > 0 &&
-      snapshot.missingPaths.length === 0 &&
-      snapshot.ignoredPaths.length === 0 &&
-      snapshot.folders.every((folder) => folder.complete) &&
-      structure.every((entry) => entry.missingIn.length === 0),
-    placements: snapshot.folders.map((folder) => ({ path: folder.path, bounds: folder.bounds })),
+    structurallyEquivalent,
+    placements,
     structure,
-    roles: compact ? comparisons.map(shareCommonValues) : comparisons,
-    ...(compact ? { valueFormat: 'Merge each role.shared with each role.values entry.' } : {}),
+    roles: comparisons,
     missingPaths: snapshot.missingPaths,
     ignoredPaths: snapshot.ignoredPaths,
     truncated: snapshot.truncated,
   };
+}
+
+function omitKey(value, key) {
+  const result = { ...value };
+  delete result[key];
+  return result;
 }
 
 function shareCommonValues(role) {
@@ -325,8 +349,11 @@ export function buildEditorDiagnostics({ texture }) {
 
   return {
     valid: errors.length === 0,
-    errors,
-    warnings,
+    errors: errors.slice(0, MAX_DIAGNOSTIC_ISSUES),
+    warnings: warnings.slice(0, MAX_DIAGNOSTIC_ISSUES),
+    ...(errors.length > MAX_DIAGNOSTIC_ISSUES || warnings.length > MAX_DIAGNOSTIC_ISSUES
+      ? { truncated: true }
+      : {}),
     summary: {
       itemCount: items.length,
       folderCount: overview.document.folderCount,

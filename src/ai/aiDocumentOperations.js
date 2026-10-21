@@ -1,4 +1,4 @@
-import { resolveTargetItems } from './aiPlanOperations';
+import { hasItemSelector, resolveTargetItems } from './aiPlanOperations';
 import {
   clamp,
   computeItemBounds,
@@ -17,18 +17,6 @@ function setStoreSelection(store, ids) {
   store.selected = ids;
   store.active_id = ids.length ? ids[ids.length - 1] : null;
   store.active_type = ids.length ? 'item' : null;
-}
-
-function hasItemSelector(target) {
-  return (
-    target?.all === true ||
-    target?.selected === true ||
-    target?.id !== undefined ||
-    (Array.isArray(target?.ids) && target.ids.length > 0) ||
-    (typeof target?.name === 'string' && target.name.trim()) ||
-    (typeof target?.query === 'string' && target.query.trim()) ||
-    (typeof target?.folderPath === 'string' && target.folderPath.trim())
-  );
 }
 
 export function applySelectionOperation({ op, texture, layers, layersStore, selectionIds }) {

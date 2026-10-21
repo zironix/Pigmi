@@ -21,6 +21,7 @@ import {
   autoArrangeCreatedItems,
   buildPerItemRecolorPalette,
   clamp,
+  collectItemFolderPaths,
   collectItemIdsFromLayerNodes,
   computeItemBounds,
   deepClone,
@@ -30,6 +31,7 @@ import {
   findFolderNodeByPath,
   findLayerNodeById,
   findNonOverlappingPosition,
+  getMapValueById,
   idKey,
   normalizeGeneratedItemName,
   normalizeHexColor,
@@ -542,6 +544,8 @@ export function applyAiPlan({
       const step = toNumber(texture.step, 1) || 1;
       const width = Math.max(1, toNumber(texture.width, 2048));
       const height = Math.max(1, toNumber(texture.height, 2048));
+      const sourceFolderPaths = new Map();
+      collectItemFolderPaths(layers, '', sourceFolderPaths);
 
       targetItems.forEach((source, sourceIndex) => {
         const cloned = deepClone(source);
@@ -578,12 +582,10 @@ export function applyAiPlan({
 
         texture.items.push(cloned);
 
+        // Without a destination the copy stays beside its source, at any nesting depth.
         let folderPath = typeof op.folderPath === 'string' ? op.folderPath : '';
         if (!folderPath) {
-          const sourceNode = findLayerNodeById(layers, source.id);
-          if (sourceNode?.parent?.type === 'folder') {
-            folderPath = sourceNode.parent.name;
-          }
+          folderPath = getMapValueById(sourceFolderPaths, source.id) || '';
         } else {
           ensureFolderPath({
             layers,

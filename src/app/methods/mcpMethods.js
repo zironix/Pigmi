@@ -52,7 +52,9 @@ function createIdFactory(texture) {
     if (Number.isSafeInteger(Number(item?.id))) ids.push(Number(item.id));
   }
 
-  let nextId = Math.max(Date.now() * 1000, ids.length ? Math.max(...ids) + 1 : 1);
+  // A loop instead of Math.max(...ids): spreading a huge document overflows the stack.
+  let nextId = Date.now() * 1000;
+  for (const id of ids) if (id >= nextId) nextId = id + 1;
   return () => nextId++;
 }
 
@@ -326,13 +328,13 @@ export const mcpMethods = {
       case 'apply_operations':
         return this.applyMcpOperations(params);
       case 'undo': {
-        const previousLength = this.undo_array.length;
+        // undo() first records pending edits, so the history length alone cannot
+        // tell whether the document changed.
+        const previousRevision = documentRevision(this.texture);
         this.undo();
         await this.$nextTick();
-        return {
-          undone: this.undo_array.length < previousLength,
-          revision: documentRevision(this.texture),
-        };
+        const revision = documentRevision(this.texture);
+        return { undone: revision !== previousRevision, revision };
       }
       case 'get_canvas_preview':
         return this.getMcpCanvasPreview(params);

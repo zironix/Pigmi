@@ -194,7 +194,7 @@ describe('selective editor context', () => {
     ]);
     expect(result.folders[0].items[1]).toMatchObject({
       colors: ['#0064c8'],
-      colorStops: [{ opacity: 35 }],
+      opacities: [35],
       material: { roughness: 5 },
     });
   });
@@ -359,7 +359,7 @@ describe('selective editor context', () => {
       path: 'Vehicle/Glass',
       colors: ['#0064c8'],
       colorOffsets: [0],
-      colorStops: [{ hex: '#0064c8', opacity: 35, offset: 0 }],
+      opacities: [35],
     });
     expect(context.results[0].items[0]).not.toHaveProperty('material');
     expect(context.results[0].items[0]).not.toHaveProperty('transform');

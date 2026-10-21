@@ -43,7 +43,7 @@ Reference images:
 
 export const PIGMI_MATERIAL_INSTRUCTIONS = `Material/PBR rules:
 - Pigmi material fields are albedo (0/1), roughness, metallic, emission strength, clearcoat, and clearcoat roughness (all 0..100 where applicable). MRC packs metallic, roughness, and clearcoat into RGB.
-- Opacity belongs to color stops, not the material object. Read colorStops when transparency matters; write opacity, opacities, or #RRGGBBAA colors.
+- Opacity belongs to color stops, not the material object. Reads include opacities only if translucent; write opacity, opacities, or #RRGGBBAA colors.
 - Preserve unspecified channels. Infer material values only from the user's words, visible reference, and full semantic paths; keep them physically coherent without decorative effects.`;
 
 export const PIGMI_LAYOUT_INSTRUCTIONS = `Layout rules:

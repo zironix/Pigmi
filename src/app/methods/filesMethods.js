@@ -102,26 +102,24 @@ export const fileMethods = {
     }
   },
   async getFiles() {
+    const folderPath = this.folder_path;
     this.files_in_folder = [];
+    if (!folderPath) return;
 
-    if (this.folder_path && this.folder_path.length > 0) {
-      try {
-        const files = await window.electronAPI.readDir(this.folder_path);
-
-        files.forEach((file) => {
-          // Project entries are JSON files; directories and other files are ignored.
-          if (file.isFile) {
-            if (file.name.endsWith('.json')) {
-              this.files_in_folder.push(file.name);
-              if (!this.selected_file) {
-                this.selected_file = file.name;
-              }
-            }
-          }
-        });
-      } catch (error) {
-        console.error('Error reading directory:', error);
+    try {
+      const files = await window.electronAPI.readDir(folderPath);
+      // Overlapping calls (UI and MCP) or a folder switch during the read must
+      // not append duplicate or foreign entries to the current list.
+      if (this.folder_path !== folderPath) return;
+      // Project entries are JSON files; directories and other files are ignored.
+      this.files_in_folder = files
+        .filter((file) => file.isFile && file.name.endsWith('.json'))
+        .map((file) => file.name);
+      if (!this.selected_file && this.files_in_folder.length) {
+        this.selected_file = this.files_in_folder[0];
       }
+    } catch (error) {
+      console.error('Error reading directory:', error);
     }
   },
   async mixTexture(type) {

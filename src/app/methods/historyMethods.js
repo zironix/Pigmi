@@ -6,7 +6,20 @@ function isTextEditingTarget(target) {
   return tag === 'input' || tag === 'textarea' || target?.isContentEditable === true;
 }
 
+// Snapshots run on every click and keyup. Remember the last two keys so the
+// previous entry, which is compared again on the next push, is not re-parsed.
+const historyKeyCache = [];
+
 function historyKey(serialized) {
+  const cached = historyKeyCache.find((entry) => entry.source === serialized);
+  if (cached) return cached.key;
+  const key = computeHistoryKey(serialized);
+  historyKeyCache.unshift({ source: serialized, key });
+  historyKeyCache.length = Math.min(historyKeyCache.length, 2);
+  return key;
+}
+
+function computeHistoryKey(serialized) {
   const texture = JSON.parse(serialized);
   for (const item of texture.items || []) delete item.selected;
   const ignoreFolderExpansion = (nodes) => {

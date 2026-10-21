@@ -539,4 +539,105 @@ describe('AI document operations', () => {
       b: 180,
     });
   });
+
+  it('never treats an empty or unmatched target as every item', () => {
+    const document = makeHouseDocument();
+    const before = JSON.stringify(document.texture);
+    const result = applyAiPlan({
+      ...document,
+      nextLayerId: () => 999,
+      plan: {
+        operations: [
+          { type: 'recolor_item', colors: ['#ffffff'] },
+          { type: 'update_item', target: {}, material: { metallic: 100 } },
+          { type: 'update_item', target: { query: 'nonexistent' }, material: { metallic: 100 } },
+          { type: 'delete_item', target: { excludeIds: [101] } },
+        ],
+      },
+    });
+
+    expect(result.warnings).toHaveLength(4);
+    expect(JSON.stringify(document.texture)).toBe(before);
+  });
+
+  it('duplicates a nested item beside its source', () => {
+    const document = makeHouseDocument();
+    const result = applyAiPlan({
+      ...document,
+      nextLayerId: () => 999,
+      plan: { operations: [{ type: 'duplicate_item', target: { id: 104 }, newName: 'Chimney 2' }] },
+    });
+
+    expect(result.warnings).toEqual([]);
+    const details = document.texture.layers[0].childs.find((node) => node.name === 'Details');
+    expect(details.childs.map((node) => node.name)).toContain('Chimney 2');
+    expect(document.texture.layers.map((node) => node.name)).toEqual(['House 1']);
+  });
+
+  it('accepts read-format material names when creating items', () => {
+    const document = makeHouseDocument();
+    applyAiPlan({
+      ...document,
+      nextLayerId: () => 999,
+      plan: {
+        operations: [
+          {
+            type: 'create_gradient_item',
+            name: 'Lamp',
+            colors: ['#ffeeaa'],
+            material: { emission_strength: 40, clearcoat_roughness: 15 },
+          },
+        ],
+      },
+    });
+
+    expect(document.texture.items.find((item) => item.name === 'Lamp')).toMatchObject({
+      emission_strength: 40,
+      clearcoat_roughness: 15,
+    });
+  });
+
+  it('places new items quickly on a densely filled fine grid', () => {
+    const items = Array.from({ length: 640 }, (_, index) => ({
+      id: index + 1,
+      name: `Item ${index}`,
+      type: 'g',
+      size: [64, 64],
+      x: (index % 32) * 64,
+      y: Math.floor(index / 32) * 64,
+      colors: [color(1, 2, 3)],
+      color_offsets: [0],
+    }));
+    const texture = {
+      width: 2048,
+      height: 2048,
+      step: 1,
+      max_item_size: 200,
+      items,
+      layers: items.map(({ id, name }) => ({ id, name, type: 'item', childs: [] })),
+    };
+    let nextId = 10_000;
+    const started = performance.now();
+    applyAiPlan({
+      texture,
+      layersStore: { selected: [] },
+      nextLayerId: () => nextId++,
+      plan: {
+        operations: [
+          {
+            type: 'create_gradient_items',
+            defaults: { size: [24, 24] },
+            items: Array.from({ length: 50 }, (_, index) => ({
+              name: `New ${index}`,
+              colors: ['#ff0000'],
+            })),
+          },
+        ],
+      },
+      layoutHints: { compactCreated: true },
+    });
+
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(texture.items.find((item) => item.name === 'New 0')).toMatchObject({ x: 0, y: 1280 });
+  });
 });

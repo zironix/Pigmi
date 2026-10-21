@@ -25,7 +25,7 @@ afterAll(async () => {
 
 describe('Pigmi MCP server contract', () => {
   it('keeps the complete tool context below its previous size', () => {
-    expect(JSON.stringify(tools).length).toBeLessThan(16_500);
+    expect(JSON.stringify(tools).length).toBeLessThan(14_500);
   });
 
   it('keeps straightforward palette creation compact and unambiguous', () => {
@@ -44,7 +44,22 @@ describe('Pigmi MCP server contract', () => {
 
     expect(defaultsSchema.type).toBe('object');
     expect(defaultsSchema).not.toHaveProperty('properties');
-    expect(defaultsSchema.additionalProperties).toEqual({});
+    // An open record compacts to a bare object schema.
+    expect(defaultsSchema).not.toHaveProperty('additionalProperties');
+  });
+
+  it('strips generated JSON Schema noise from tool definitions', () => {
+    const serialized = JSON.stringify(tools);
+    expect(serialized).not.toContain(String(Number.MAX_SAFE_INTEGER));
+    expect(serialized).not.toContain('$schema');
+    expect(serialized).not.toContain('propertyNames');
+    const layout = tools.find((tool) => tool.name === 'pigmi_create_items').inputSchema.properties
+      .layout;
+    expect(layout.type).toEqual(['object', 'null']);
+    expect(layout.properties.itemsPerRow).toEqual({
+      type: ['integer', 'null'],
+      exclusiveMinimum: 0,
+    });
   });
 
   it('exposes the script fast path with bounded code and dry-run/read-only controls', () => {

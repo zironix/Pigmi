@@ -122,39 +122,33 @@ export function itemColorStops(item) {
     .filter(Boolean);
 }
 
+// Material and gradient reads use the same field names that writes accept.
 export function itemMaterial(item) {
   return {
     albedo: item?.albedo,
     roughness: item?.roughness,
     metallic: item?.metallic,
     emission: item?.emission,
-    emission_strength: item?.emission_strength,
+    emissionStrength: item?.emission_strength,
     clearcoat: item?.clearcoat,
-    clearcoat_roughness: item?.clearcoat_roughness,
+    clearcoatRoughness: item?.clearcoat_roughness,
   };
 }
 
 export function gradientDescriptor(item) {
-  const type = item?.type === 'sg' ? 'stepped' : 'smooth';
-  const shape =
-    item?.type === 'g'
-      ? item.shape === 'r'
-        ? 'radial'
-        : item.shape === 'c'
-          ? 'conic'
-          : 'linear'
-      : 'cells';
-  return {
-    type,
-    itemType: item?.type,
-    shape,
-    shapeCode: item?.shape,
-    direction: item?.direction,
-    colorMode: item?.color_mode,
-    stepCells: item?.type === 'sg' ? item?.steps : null,
-    cellSize: item?.type === 'sg' ? item?.size : null,
-    pixelSize: item?.type === 'g' ? item?.size : null,
-  };
+  return item?.type === 'sg'
+    ? {
+        direction: item.direction,
+        colorMode: item.color_mode,
+        size: item.size,
+        steps: item.steps,
+      }
+    : {
+        shape: item?.shape,
+        direction: item?.direction,
+        colorMode: item?.color_mode,
+        size: item?.size,
+      };
 }
 
 export function hsvToHex(h, s, v) {
@@ -552,16 +546,47 @@ export function findNonOverlappingPosition({ item, desiredX, desiredY, texture, 
   const startX = clamp(snap(toNumber(desiredX, 0), step), 0, maxX);
   const startY = clamp(snap(toNumber(desiredY, 0), step), 0, maxY);
 
-  // Deterministic flow layout: fill rows left->right, then top->bottom.
-  // Start near desired cell, then continue in reading order.
+  const occupied = [];
+  for (const other of occupiedItems || []) {
+    if (!other || other.id === item?.id) continue;
+    const otherBounds = computeItemBounds(other);
+    if (!otherBounds) continue;
+    occupied.push({
+      x: toNumber(other.x, 0),
+      y: toNumber(other.y, 0),
+      w: otherBounds.w,
+      h: otherBounds.h,
+    });
+  }
+
+  // Deterministic flow layout: fill rows left->right, then top->bottom, starting
+  // near the desired cell. The scan visits the same grid cells in the same order
+  // as a cell-by-cell search but skips cells that are provably blocked.
   const scanPass = (yFrom, yTo, firstRowXFrom) => {
-    for (let y = yFrom; y <= yTo; y += step) {
+    for (let y = yFrom; y <= yTo;) {
+      const row = occupied.filter((rect) => rect.y < y + bounds.h && y < rect.y + rect.h);
       const rowStartX = y === yFrom ? firstRowXFrom : 0;
-      for (let x = rowStartX; x <= maxX; x += step) {
-        if (!intersectsAnyItem({ x, y, bounds, items: occupiedItems, ignoreId: item?.id })) {
-          return { x, y };
+      for (let x = rowStartX; x <= maxX;) {
+        let blockedUntil = null;
+        for (const rect of row) {
+          const right = rect.x + rect.w;
+          if (
+            rect.x < x + bounds.w &&
+            x < right &&
+            (blockedUntil === null || right > blockedUntil)
+          ) {
+            blockedUntil = right;
+          }
         }
+        if (blockedUntil === null) return { x, y };
+        // Every cell left of the blocker's right edge overlaps that blocker as well.
+        while (x < blockedUntil) x += step;
       }
+      // A fully blocked row stays blocked until one of its blockers ends.
+      const freeFrom =
+        rowStartX === 0 ? row.reduce((min, rect) => Math.min(min, rect.y + rect.h), Infinity) : y;
+      do y += step;
+      while (y < freeFrom);
     }
     return null;
   };

@@ -2,6 +2,7 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 
 import { PigmiBridgeClient } from './bridge-client.mjs';
@@ -13,6 +14,7 @@ import {
 } from './instructions.mjs';
 import { getOperationReference } from './operation-reference.mjs';
 import { errorToolResult, jsonToolResult } from './tool-results.mjs';
+import { compactToolList } from './tool-schema.mjs';
 import { runEditorScript } from './script-runner.mjs';
 
 const bridge = new PigmiBridgeClient();
@@ -20,6 +22,22 @@ const server = new McpServer(
   { name: 'pigmi', version: '1.6.0' },
   { instructions: PIGMI_SERVER_INSTRUCTIONS },
 );
+
+// Tool definitions are resent to the model on every turn; compact the generated
+// JSON Schema before McpServer installs its tools/list handler.
+const setRequestHandler = server.server.setRequestHandler.bind(server.server);
+server.server.setRequestHandler = (schema, handler) =>
+  setRequestHandler(
+    schema,
+    schema === ListToolsRequestSchema
+      ? async (...args) => compactToolList(await handler(...args))
+      : handler,
+  );
+
+const detailFieldSchema = z.enum(['colors', 'gradient', 'material', 'transform', 'visibility']);
+const percentSchema = z.number().min(0).max(100);
+const positiveSchema = z.number().positive();
+const colorsSchema = z.array(z.string()).min(1);
 
 const itemRequestSchema = z.object({
   type: z.enum(['get_items', 'get_palette']).default('get_items'),
@@ -40,9 +58,7 @@ const itemRequestSchema = z.object({
     })
     .nullable()
     .default(null),
-  fields: z
-    .array(z.enum(['colors', 'gradient', 'material', 'transform', 'visibility']))
-    .default([]),
+  fields: z.array(detailFieldSchema).default([]),
   limit: z.number().int().min(1).max(100).default(30),
   offset: z
     .number()
@@ -52,69 +68,54 @@ const itemRequestSchema = z.object({
     .describe('Continue at nextOffset if truncated; keep the same selectors and revision.'),
 });
 
-const detailFieldSchema = z.enum(['colors', 'gradient', 'material', 'transform', 'visibility']);
-
 const materialSchema = z.object({
   albedo: z.number().min(0).max(1).optional(),
-  roughness: z.number().min(0).max(100).optional(),
-  metallic: z.number().min(0).max(100).optional(),
+  roughness: percentSchema.optional(),
+  metallic: percentSchema.optional(),
   emission: z.number().min(0).max(1).optional(),
-  emissionStrength: z.number().min(0).max(100).optional(),
-  clearcoat: z.number().min(0).max(100).optional(),
-  clearcoatRoughness: z.number().min(0).max(100).optional(),
+  emissionStrength: percentSchema.optional(),
+  clearcoat: percentSchema.optional(),
+  clearcoatRoughness: percentSchema.optional(),
 });
+
+// Optional gradient fields shared by item creation and folder item edits.
+const itemStyleFields = {
+  itemType: z.enum(['g', 'sg']).optional(),
+  shape: z.enum(['l', 'r', 'c']).optional(),
+  direction: z.enum(['horizontal', 'vertical']).optional(),
+  colorMode: z.enum(['rgb', 'hsl', 'black_to_white']).optional(),
+  colorOffsets: z.array(percentSchema).optional(),
+  opacity: percentSchema.optional(),
+  opacities: z.array(percentSchema).optional(),
+  size: z.union([positiveSchema, z.tuple([positiveSchema, positiveSchema])]).optional(),
+  sizeW: positiveSchema.optional(),
+  sizeH: positiveSchema.optional(),
+  steps: positiveSchema.optional(),
+  material: materialSchema.optional(),
+};
+
+const offsetSchema = z.object({ x: z.number().optional(), y: z.number().optional() });
 
 const folderItemEditSchema = z.object({
   relativePath: z.string().min(1),
   newName: z.string().min(1).optional(),
-  itemType: z.enum(['g', 'sg']).optional(),
-  shape: z.enum(['l', 'r', 'c']).optional(),
-  direction: z.enum(['horizontal', 'vertical']).optional(),
-  colorMode: z.enum(['rgb', 'hsl', 'black_to_white']).optional(),
-  colors: z.array(z.string()).min(1).optional(),
-  opacity: z.number().min(0).max(100).optional(),
-  opacities: z.array(z.number().min(0).max(100)).optional(),
-  colorOffsets: z.array(z.number().min(0).max(100)).optional(),
-  size: z
-    .union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive()])])
-    .optional(),
-  sizeW: z.number().positive().optional(),
-  sizeH: z.number().positive().optional(),
-  steps: z.number().positive().optional(),
+  colors: colorsSchema.optional(),
+  ...itemStyleFields,
   x: z.number().optional(),
   y: z.number().optional(),
-  offset: z.object({ x: z.number().optional(), y: z.number().optional() }).optional(),
-  offsetCells: z.object({ x: z.number().optional(), y: z.number().optional() }).optional(),
+  offset: offsetSchema.optional(),
+  offsetCells: offsetSchema.optional(),
   visible: z.boolean().optional(),
-  material: materialSchema.optional(),
 });
-
-const gradientItemStyleFields = {
-  itemType: z.enum(['g', 'sg']).optional(),
-  shape: z.enum(['l', 'r', 'c']).optional(),
-  direction: z.enum(['horizontal', 'vertical']).optional(),
-  colorMode: z.enum(['rgb', 'hsl', 'black_to_white']).optional(),
-  colors: z.array(z.string()).min(1),
-  colorOffsets: z.array(z.number().min(0).max(100)).optional(),
-  opacity: z.number().min(0).max(100).optional(),
-  opacities: z.array(z.number().min(0).max(100)).optional(),
-  size: z
-    .union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive()])])
-    .optional(),
-  sizeW: z.number().positive().optional(),
-  sizeH: z.number().positive().optional(),
-  steps: z.number().positive().optional(),
-  material: materialSchema.optional(),
-};
 
 const gradientItemSchema = z.object({
   name: z.string().min(1),
-  colors: z.array(z.string()).min(1),
+  colors: colorsSchema,
   folderPath: z
     .string()
     .optional()
     .describe('Per-item destination override; omit when the common folderPath applies.'),
-  ...gradientItemStyleFields,
+  ...itemStyleFields,
   x: z.number().optional(),
   y: z.number().optional(),
 });
@@ -250,7 +251,7 @@ server.registerTool(
         .array(
           z.object({
             newPath: z.string().min(1),
-            offset: z.object({ x: z.number().optional(), y: z.number().optional() }).optional(),
+            offset: offsetSchema.optional(),
             itemEdits: z.array(folderItemEditSchema).default([]),
           }),
         )

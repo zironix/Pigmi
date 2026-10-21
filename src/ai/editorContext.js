@@ -26,61 +26,6 @@ const MAX_DATA_REQUESTS = 4;
 const MAX_ITEMS_PER_REQUEST = 100;
 const MAX_ITEMS_PER_WORKFLOW = 200;
 
-export const EDITOR_DATA_REQUEST_SCHEMA = {
-  type: 'object',
-  properties: {
-    intent: { type: 'string' },
-    requests: {
-      type: 'array',
-      maxItems: MAX_DATA_REQUESTS,
-      items: {
-        type: 'object',
-        properties: {
-          type: { type: 'string', enum: ['get_items', 'get_palette'] },
-          ids: { type: 'array', items: { type: ['number', 'string'] } },
-          paths: { type: 'array', items: { type: 'string' } },
-          query: { type: 'string' },
-          folderPath: { type: 'string' },
-          selected: { type: 'boolean' },
-          rect: {
-            type: ['object', 'null'],
-            properties: {
-              x: { type: 'number' },
-              y: { type: 'number' },
-              width: { type: 'number' },
-              height: { type: 'number' },
-            },
-            required: ['x', 'y', 'width', 'height'],
-            additionalProperties: false,
-          },
-          fields: {
-            type: 'array',
-            items: {
-              type: 'string',
-              enum: [...ITEM_DETAIL_FIELDS],
-            },
-          },
-          limit: { type: 'number' },
-          offset: { type: 'integer', minimum: 0 },
-        },
-        required: ['type', 'ids', 'query', 'folderPath', 'selected', 'fields', 'limit'],
-        additionalProperties: false,
-      },
-    },
-    imageRequest: {
-      type: ['object', 'null'],
-      properties: {
-        type: { type: 'string', enum: ['get_attached_image'] },
-        reason: { type: 'string' },
-      },
-      required: ['type', 'reason'],
-      additionalProperties: false,
-    },
-  },
-  required: ['intent', 'requests', 'imageRequest'],
-  additionalProperties: false,
-};
-
 export function buildItemPath(item, itemFolderMap) {
   return [folderPathForId(itemFolderMap, item.id), item.name]
     .map((value) => String(value || '').trim())
@@ -434,15 +379,18 @@ export function serializeItemDetails(item, itemFolderMap, requestedFields) {
   const result = {
     id: item.id,
     name: item.name,
-    folderPath: folderPathForId(itemFolderMap, item.id),
     path: buildItemPath(item, itemFolderMap),
-    type: item.type,
+    itemType: item.type,
   };
 
   if (requestedFields.has('colors')) {
-    result.colors = itemHexColors(item);
-    result.colorOffsets = Array.isArray(item.color_offsets) ? item.color_offsets.slice() : [];
-    result.colorStops = itemColorStops(item);
+    // colors/colorOffsets/opacities mirror the write fields; opacities only when not opaque.
+    const stops = itemColorStops(item);
+    result.colors = stops.map((stop) => stop.hex);
+    if (Array.isArray(item.color_offsets)) result.colorOffsets = item.color_offsets.slice();
+    if (stops.some((stop) => stop.opacity !== 100)) {
+      result.opacities = stops.map((stop) => stop.opacity);
+    }
   }
   if (requestedFields.has('gradient')) {
     result.gradient = gradientDescriptor(item);
@@ -451,11 +399,8 @@ export function serializeItemDetails(item, itemFolderMap, requestedFields) {
     result.material = itemMaterial(item);
   }
   if (requestedFields.has('transform')) {
-    result.transform = {
-      x: item.x,
-      y: item.y,
-      bounds: computeItemBounds(item),
-    };
+    const bounds = computeItemBounds(item);
+    result.transform = { x: item.x, y: item.y, w: bounds?.w, h: bounds?.h };
   }
   if (requestedFields.has('visibility')) {
     result.visible = item.visible !== false;
@@ -524,12 +469,5 @@ export function fulfillEditorDataRequests({ texture, selectionIds, requests: raw
     };
   });
 
-  return {
-    results,
-    limits: {
-      maxRequests: MAX_DATA_REQUESTS,
-      maxItemsPerRequest: MAX_ITEMS_PER_REQUEST,
-      maxItemsPerWorkflow: MAX_ITEMS_PER_WORKFLOW,
-    },
-  };
+  return { results };
 }

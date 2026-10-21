@@ -58,11 +58,14 @@ describe('MCP context economy and revisions', () => {
     const expanded = compareFolderSnapshots(params);
     const compact = compareFolderSnapshots({ ...params, compact: true });
     expect(
-      compact.roles.map(({ shared, ...role }) => ({
+      compact.roles.map(({ shared, missingIn = [], ...role }) => ({
         ...role,
+        presentIn: compact.comparedPaths.filter((path) => !missingIn.includes(path)),
+        missingIn,
         values: role.values.map((entry) => ({ ...shared, ...entry })),
       })),
     ).toEqual(expanded.roles);
+    expect(compact.structure).toEqual(expanded.structure.filter((entry) => entry.missingIn.length));
     expect(JSON.stringify(compact).length).toBeLessThan(JSON.stringify(expanded).length * 0.7);
     console.info(
       'MCP response characters:',
