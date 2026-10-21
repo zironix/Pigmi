@@ -251,3 +251,17 @@ focused.
 While center locking is enabled, zoom keeps the canvas centered. Panning releases center locking
 while preserving the current position; subsequent zoom follows the pointer. The center control at the bottom of the window restores automatic centering and hides
 while the canvas is centered.
+
+## Appearance
+
+Pigmi uses floating graphite panels over a full-window canvas. The default accent is pink
+(`#ea1f62`). Appearance settings offer presets, a custom color, and white or dark button text;
+these choices are saved locally for all projects, outside texture files.
+
+The procedural grid follows snapping and zoom. Major horizontal and vertical lines default to
+every four cells, and grid settings include a live preview. Selection markers use a vector overlay
+and movement animates only the preview, so exported maps keep exact document coordinates and
+never include the grid or selection markers. The system's reduced-motion preference disables
+animations.
+
+The interface before the 3.0 redesign is available at the `v2.1.10` tag.

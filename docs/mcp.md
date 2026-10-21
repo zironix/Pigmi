@@ -110,7 +110,7 @@ Writes support `expectedRevision` to reject stale edits and `dryRun` to validate
 By default, operation warnings reject the whole batch. Folder variants preserve the source tree
 and unspecified properties. Creating items does not implicitly select them.
 
-See [the protocol notes](architecture.md#mcp-editor-protocol) for developer details.
+See [the protocol notes](development.md#mcp-editor-protocol) for developer details.
 
 ## Troubleshooting
 
