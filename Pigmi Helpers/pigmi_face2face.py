@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Pigmi: Face to Face",
     "author": "Oleg Pavlov",
-    "version": (1, 7, 18),
+    "version": (1, 7, 19),
     "blender": (4, 3, 0),
     "location": "View3D > Tool Shelf > Pigmi: Face to Face",
     "description": (
@@ -19,6 +19,25 @@ from mathutils import Vector, Matrix
 # Global storage for the saved mesh part and keymaps
 saved_state = {}
 addon_keymaps = []
+
+def _elems_by_index(seq, indices):
+    """Return the elements of seq whose .index is in indices, in seq order.
+    Uses the lookup table when element indices match table positions,
+    otherwise falls back to a full scan."""
+    seq.ensure_lookup_table()
+    count = len(seq)
+    found = []
+    for idx in sorted(indices):
+        if 0 <= idx < count:
+            elem = seq[idx]
+            if elem.index == idx:
+                found.append(elem)
+                continue
+        break
+    else:
+        return found
+    index_set = set(indices)
+    return [elem for elem in seq if elem.index in index_set]
 
 class MESH_OT_snap_mesh_piece(bpy.types.Operator):
     """Saves the selected mesh part and attaches it to the target element (face or edge)"""
@@ -115,11 +134,8 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                 if not sel_faces:
                     self.report({'ERROR'}, "No selected faces")
                     return {'CANCELLED'}
-                vertex_indices = set()
-                for f in sel_faces:
-                    for v in f.verts:
-                        vertex_indices.add(v.index)
-                orig_positions = {v.index: v.co.copy() for v in bm.verts if v.index in vertex_indices}
+                vertex_indices = {v.index for f in sel_faces for v in f.verts}
+                orig_positions = {v.index: v.co.copy() for v in _elems_by_index(bm.verts, vertex_indices)}
                 base_center = active_elem.calc_center_median()
                 base_normal = active_elem.normal.copy()
                 if base_normal.length > 1e-6:
@@ -152,14 +168,12 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                 if not sel_edges:
                     self.report({'ERROR'}, "No selected edges")
                     return {'CANCELLED'}
-                vertex_indices = set()
-                for edge in sel_edges:
-                    for v in edge.verts:
-                        vertex_indices.add(v.index)
-                orig_positions = {v.index: v.co.copy() for v in bm.verts if v.index in vertex_indices}
+                vertex_indices = {v.index for edge in sel_edges for v in edge.verts}
+                orig_positions = {v.index: v.co.copy() for v in _elems_by_index(bm.verts, vertex_indices)}
                 sel_faces = [f for f in bm.faces if f.select]
                 if not sel_faces:
-                    sel_faces = [f for f in bm.faces if any(e in sel_edges for e in f.edges)]
+                    sel_edge_set = set(sel_edges)
+                    sel_faces = [f for f in bm.faces if any(e in sel_edge_set for e in f.edges)]
                 v0 = active_elem.verts[0].co
                 v1 = active_elem.verts[1].co
                 base_center = (v0 + v1) * 0.5
@@ -197,18 +211,24 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
             return {'FINISHED'}
 
         # Second call: perform the attachment/duplication.
-        if self.duplicate_to_faces:
-            # Reset positions to original.
-            for v in bm.verts:
-                if v.index in saved_state["vertex_indices"]:
-                    v.co = saved_state["orig_positions"][v.index].copy()
-            bmesh.update_edit_mesh(obj.data)
+        vertex_set = set(saved_state["vertex_indices"])
+        face_set = set(saved_state.get("face_indices", []))
+        orig_positions = saved_state["orig_positions"]
+        saved_verts = _elems_by_index(bm.verts, vertex_set)
 
+        # Reset positions to original.
+        for v in saved_verts:
+            v.co = orig_positions[v.index]
+        bmesh.update_edit_mesh(obj.data)
+
+        if self.duplicate_to_faces:
             if saved_state["element_type"] == "FACE":
-                target_elements = [f for f in bm.faces if f.select and f.index not in saved_state["face_indices"]]
+                target_elements = [f for f in bm.faces if f.select and f.index not in face_set]
                 if not target_elements:
                     self.report({'ERROR'}, "No target face selected (excluding the saved part)")
                     return {'CANCELLED'}
+                saved_faces = _elems_by_index(bm.faces, face_set)
+                geom_to_duplicate = saved_verts + saved_faces
                 all_dup_faces = []
                 for target_face in target_elements:
                     target_center = target_face.calc_center_median()
@@ -249,9 +269,6 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                     scale_matrix = Matrix.Translation(target_center) @ Matrix.Scale(self.scale_factor, 4) @ Matrix.Translation(-target_center)
                     M_new = scale_matrix @ M
 
-                    saved_verts = [v for v in bm.verts if v.index in saved_state["vertex_indices"]]
-                    saved_faces = [f for f in bm.faces if f.index in saved_state["face_indices"]]
-                    geom_to_duplicate = saved_verts + saved_faces
                     dup_result = bmesh.ops.duplicate(bm, geom=geom_to_duplicate)
                     dup_geom = dup_result.get("geom_dup") or dup_result.get("geom", [])
                     dup_verts = [elem for elem in dup_geom if isinstance(elem, bmesh.types.BMVert)]
@@ -268,22 +285,24 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                             bm.faces[idx].select = True
                         except Exception:
                             pass
-                    bmesh.update_edit_mesh(obj.data)
                 else:
                     for f in all_dup_faces:
                         f.select = False
-                    for f in bm.faces:
-                        if f.index in saved_state.get("face_indices", []):
-                            f.select = False
+                    for f in _elems_by_index(bm.faces, face_set):
+                        f.select = False
                 self.update_view()
                 self.report({'INFO'}, "Mesh piece duplicates created on target face(s).")
                 return {'FINISHED'}
 
             else:  # EDGE duplication
-                target_elements = [e for e in bm.edges if e.select and e.index not in saved_state["edge_indices"]]
+                edge_set = set(saved_state["edge_indices"])
+                target_elements = [e for e in bm.edges if e.select and e.index not in edge_set]
                 if not target_elements:
                     self.report({'ERROR'}, "No target edge selected (excluding the saved part)")
                     return {'CANCELLED'}
+                saved_faces = _elems_by_index(bm.faces, face_set)
+                # Exclude saved edges from duplication – vertices and faces suffice.
+                geom_to_duplicate = saved_verts + saved_faces
                 all_dup_faces = []
                 for target_edge in target_elements:
                     v0 = target_edge.verts[0].co
@@ -332,10 +351,6 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                     else:
                         M_new = scale_matrix @ M0
 
-                    saved_verts = [v for v in bm.verts if v.index in saved_state["vertex_indices"]]
-                    saved_faces = [f for f in bm.faces if f.index in saved_state.get("face_indices", [])]
-                    # Exclude saved edges from duplication – vertices and faces suffice.
-                    geom_to_duplicate = saved_verts + saved_faces
                     dup_result = bmesh.ops.duplicate(bm, geom=geom_to_duplicate)
                     dup_geom = dup_result.get("geom_dup") or dup_result.get("geom", [])
                     dup_verts = [elem for elem in dup_geom if isinstance(elem, bmesh.types.BMVert)]
@@ -352,28 +367,21 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                             bm.faces[idx].select = True
                         except Exception:
                             pass
-                    bmesh.update_edit_mesh(obj.data)
                 else:
                     for f in all_dup_faces:
                         f.select = False
-                    for f in bm.faces:
-                        if f.index in saved_state.get("face_indices", []):
-                            f.select = False
+                    for f in _elems_by_index(bm.faces, face_set):
+                        f.select = False
                 self.update_view()
                 self.report({'INFO'}, "Mesh piece duplicates created on target edge(s).")
                 return {'FINISHED'}
 
         else:
             # Non-duplicate mode – move the original saved mesh part.
-            for v in bm.verts:
-                if v.index in saved_state["vertex_indices"]:
-                    v.co = saved_state["orig_positions"][v.index].copy()
-            bmesh.update_edit_mesh(obj.data)
-
             if saved_state["element_type"] == "FACE":
                 target_face = bm.faces.active
                 for v in target_face.verts:
-                    if v.index in saved_state["vertex_indices"]:
+                    if v.index in vertex_set:
                         self.report({'ERROR'}, "Target face belongs to the saved part")
                         return {'CANCELLED'}
                 target_center = target_face.calc_center_median()
@@ -411,11 +419,8 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                 M = Matrix.Translation(T) @ R.to_4x4()
                 scale_matrix = Matrix.Translation(target_center) @ Matrix.Scale(self.scale_factor, 4) @ Matrix.Translation(-target_center)
                 M_new = scale_matrix @ M
-                for v in bm.verts:
-                    if v.index in saved_state["vertex_indices"]:
-                        new_co = M_new @ saved_state["orig_positions"][v.index].to_4d()
-                        v.co = new_co.to_3d()
-                bmesh.update_edit_mesh(obj.data)
+                for v in saved_verts:
+                    v.co = M_new @ orig_positions[v.index]
                 bm.faces.ensure_lookup_table()
                 if self.restore_selection:
                     bpy.ops.mesh.select_all(action='DESELECT')
@@ -426,15 +431,15 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                             pass
                     if "active_face_index" in saved_state and saved_state["active_face_index"] < len(bm.faces):
                         bm.faces.active = bm.faces[saved_state["active_face_index"]]
-                    bmesh.update_edit_mesh(obj.data)
                 self.update_view()
                 self.report({'INFO'}, "Mesh piece attached to target face.")
                 return {'FINISHED'}
 
             else:  # EDGE (moving)
                 target_edge = None
+                edge_set = set(saved_state.get("edge_indices", []))
                 for elem in reversed(bm.select_history):
-                    if isinstance(elem, bmesh.types.BMEdge) and (elem.index not in saved_state.get("edge_indices", [])):
+                    if isinstance(elem, bmesh.types.BMEdge) and (elem.index not in edge_set):
                         target_edge = elem
                         break
                 if not target_edge:
@@ -484,10 +489,8 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                     M_new = scale_matrix @ (mirror @ M0)
                 else:
                     M_new = scale_matrix @ M0
-                for v in bm.verts:
-                    if v.index in saved_state["vertex_indices"]:
-                        v.co = (M_new @ saved_state["orig_positions"][v.index].to_4d()).to_3d()
-                bmesh.update_edit_mesh(obj.data)
+                for v in saved_verts:
+                    v.co = M_new @ orig_positions[v.index]
                 if self.restore_selection:
                     bpy.ops.mesh.select_all(action='DESELECT')
                     bm.edges.ensure_lookup_table()
@@ -496,7 +499,6 @@ class MESH_OT_snap_mesh_piece(bpy.types.Operator):
                             bm.edges[idx].select = True
                         except Exception:
                             pass
-                    bmesh.update_edit_mesh(obj.data)
                 self.update_view()
                 self.report({'INFO'}, "Mesh piece attached to target edge.")
                 return {'FINISHED'}
