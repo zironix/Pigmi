@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, net, shell } from 'electron';
 import started from 'electron-squirrel-startup';
 
+import { createBlenderAddonIntegration } from './main/blender/integration';
 import { registerIpcHandlers } from './main/ipc';
 import { createMcpIntegration } from './main/mcp/integration';
 import { createMainWindow } from './main/window/createMainWindow';
@@ -19,8 +20,12 @@ registerIpcHandlers({
   shell,
 });
 const mcpIntegration = createMcpIntegration({ app, ipcMain, getMainWindow: () => mainWindow });
+const blenderAddon = createBlenderAddonIntegration({ app, ipcMain });
 
 app.whenReady().then(async () => {
+  blenderAddon
+    .updateOnLaunch()
+    .catch((error) => console.error('Failed to update the Blender add-on:', error));
   mainWindow = createMainWindow({
     devServerUrl: MAIN_WINDOW_VITE_DEV_SERVER_URL,
     rendererName: MAIN_WINDOW_VITE_NAME,

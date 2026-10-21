@@ -1,5 +1,8 @@
 export const IPC_CHANNELS = Object.freeze({
   appInfo: 'app-info',
+  blenderAddonInstall: 'blender-addon-install',
+  blenderAddonSetAutoUpdate: 'blender-addon-set-auto-update',
+  blenderAddonStatus: 'blender-addon-status',
   checkForUpdates: 'check-for-updates',
   openReleasesPage: 'open-releases-page',
   selectFolder: 'select-folder',
