@@ -19,7 +19,7 @@ import { runEditorScript } from './script-runner.mjs';
 
 const bridge = new PigmiBridgeClient();
 const server = new McpServer(
-  { name: 'pigmi', version: '1.6.0' },
+  { name: 'pigmi', version: '1.7.0' },
   { instructions: PIGMI_SERVER_INSTRUCTIONS },
 );
 
