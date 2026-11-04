@@ -67,7 +67,7 @@ Three companion add-ons live in [Pigmi Helpers](Pigmi%20Helpers):
 
 | Add-on                                               | What it does                                                                 |
 | ---------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [UV to Palette](Pigmi%20Helpers/pigmi_uv2palette.py) | Moves UVs onto palette cells and maps gradients by path, radius, or distance |
+| [UV to Palette](Pigmi%20Helpers/pigmi_uv2palette.py) | Moves UVs onto palette cells, maps gradients by path, radius, or distance, copies them to matching pieces and mirrors painting with symmetry |
 | [Highlighter](Pigmi%20Helpers/pigmi_highlighter.py)  | Paints vertex colors from a palette, with preview, save, and restore         |
 | [Face to Face](Pigmi%20Helpers/pigmi_face2face.py)   | Saves a mesh part relative to a face or edge and attaches it to other ones   |
 

@@ -1,11 +1,12 @@
 bl_info = {
     "name": "Pigmi: UV to Palette",
     "author": "Oleg Pavlov",
-    "version": (1, 19, 2),
+    "version": (1, 20, 0),
     "blender": (5, 0, 0),
     "location": "3D View > Sidebar > Snap UV",
     "description": (
-        "Moves selected UVs to palette cells and maps palette gradients by line, radius, or distance."
+        "Moves selected UVs to palette cells, maps palette gradients by line, radius, or distance, "
+        "copies them to matching pieces and mirrors painting with symmetry."
     ),
     "category": "UV",
 }
@@ -18,8 +19,9 @@ import time
 import numpy as np
 from types import SimpleNamespace
 from bpy.app.handlers import persistent
-from mathutils import Vector, Quaternion
+from mathutils import Matrix, Vector, Quaternion
 from mathutils.bvhtree import BVHTree
+from mathutils.kdtree import KDTree
 from bpy_extras import view3d_utils
 
 # --- Runtime state ---
@@ -1483,26 +1485,20 @@ def init_properties():
         description="Cell height in pixels")
     # Margins now as fraction (0.0 to 0.5) of the cell size
     sc.snap_uv_margin_x = bpy.props.FloatProperty(
-        name="Margin X (%)", default=0.0, min=0.0, max=0.5,
+        name="Margin X", default=0.0, min=0.0, max=0.5, subtype='FACTOR',
         description="Horizontal margin as a fraction of the cell width (0.0 to 0.5)")
     sc.snap_uv_margin_y = bpy.props.FloatProperty(
-        name="Margin Y (%)", default=0.0, min=0.0, max=0.5,
+        name="Margin Y", default=0.0, min=0.0, max=0.5, subtype='FACTOR',
         description="Vertical margin as a fraction of the cell height (0.0 to 0.5)")
     # Additional options:
     sc.snap_uv_preserve = bpy.props.BoolProperty(
-        name="Preserve Previous Fitting", default=False,
+        name="Keep Previous Fit", default=False,
         description="If enabled, if the selected UVs (or islands) are already snapped to a cell, "
                     "their relative position and scale relative to that cell are preserved when moving to a new cell.")
     sc.snap_uv_independent = bpy.props.BoolProperty(
-        name="Independent Islands", default=False,
+        name="Each Island Separately", default=False,
         description="If enabled, process each UV island independently. When the mesh is split (via Mesh → Split → Selection), "
                     "the loose parts are treated as separate islands.")
-    sc.snap_uv_controls_expanded = bpy.props.BoolProperty(
-        name="Controls", default=False,
-        description="Show painting shortcuts and interaction hints")
-    sc.snap_uv_cavity_expanded = bpy.props.BoolProperty(
-        name="Cavity / Fake AO", default=False,
-        description="Show cavity and fake ambient occlusion settings")
     sc.snap_uv_easy_mode = bpy.props.BoolProperty(
         name="Easy Mode", default=False,
         description="Click a seam-delimited piece to project or move it to the active cell. Draw gradients to automatically pick whole pieces")
@@ -1602,6 +1598,36 @@ def init_properties():
         name="Auto Preview",
         default=True,
         description="After Ctrl/Cmd+click cavity mapping, reapply it automatically when cavity settings change.")
+    sc.snap_uv_symmetry = bpy.props.BoolVectorProperty(
+        name="Symmetry", size=3, default=(False, False, False), subtype='XYZ',
+        description="Mirror every paint action across the object's local axes, through its origin. "
+                    "Faces on the symmetry plane and faces painted directly are left alone. "
+                    "To copy UVs onto mirrored parts placed anywhere, use Copy to Matching Pieces")
+    sc.snap_uv_match_scope = bpy.props.EnumProperty(
+        name="Match", default='FACES',
+        items=[('FACES', "Faces", "Match the selected faces as they are, wherever an identical set of "
+                                  "faces exists (e.g. every side of a cube)"),
+               ('SEAMS', "Seam Pieces", "Grow the selection to whole seam-delimited pieces and match "
+                                        "only whole pieces"),
+               ('LINKED', "Linked Parts", "Grow the selection to whole connected parts and match only "
+                                          "whole loose parts of the mesh")],
+        description="What counts as one piece when looking for identical copies")
+    sc.snap_uv_match_mirror = bpy.props.BoolProperty(
+        name="Mirror Copies", default=True,
+        description="Also find mirror-image copies of the piece (e.g. left and right parts), wherever "
+                    "they are and however they are turned. Unrelated to Symmetry, which mirrors "
+                    "painting live across the object's axes")
+    sc.snap_uv_match_scale = bpy.props.BoolProperty(
+        name="Scaled Copies", default=False,
+        description="Also find copies of the piece that are uniformly bigger or smaller")
+    sc.snap_uv_match_tolerance = bpy.props.FloatProperty(
+        name="Match Tolerance", default=0.002, min=0.00001, max=0.1, precision=4, step=0.01,
+        description="How far a copy's vertices may be off, as a fraction of the piece size. "
+                    "Raise it for copies that were not duplicated exactly")
+    sc.snap_uv_symmetry_tolerance = bpy.props.FloatProperty(
+        name="Symmetry Tolerance", default=0.002, min=0.00001, max=0.1, precision=4, step=0.01,
+        description="How far a mirrored vertex may be off, as a fraction of the painted area's size. "
+                    "Raise it for meshes that are only roughly symmetric")
     sc.snap_uv_last_cell_x = bpy.props.IntProperty(
         name="Last Cell X",
         default=0,
@@ -1629,6 +1655,8 @@ def clear_properties():
         "snap_uv_cavity_invert", "snap_uv_cavity_auto_preview",
         "snap_uv_last_cell_x", "snap_uv_last_cell_y_top",
         "snap_uv_cavity_expanded", "snap_uv_controls_expanded",
+        "snap_uv_symmetry", "snap_uv_match_scope", "snap_uv_match_mirror",
+        "snap_uv_match_scale", "snap_uv_match_tolerance", "snap_uv_symmetry_tolerance",
     )
     for property_name in property_names:
         if hasattr(sc, property_name):
@@ -1649,6 +1677,7 @@ def reset_painting_state():
             painter.finish_painting(bpy.context)
         except (ReferenceError, AttributeError, RuntimeError):
             pass
+    reset_match_session()
     PIGMI_STATE.reset()
     clear_uv_box_preview()
     return None
@@ -1663,8 +1692,10 @@ def pigmi_load_pre(*_args):
 
 @persistent
 def pigmi_load_post(*_args):
-    global active_gradient_painter
+    global active_gradient_painter, active_match_session, _corner_index_cache
     active_gradient_painter = None
+    active_match_session = None
+    _corner_index_cache = None
     PIGMI_STATE.reset()
 
 # --- Operator ---
@@ -2499,10 +2530,14 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         if context.scene.snap_uv_independent:
             islands = get_selected_uv_islands(
                 bm, uv_layer, context.tool_settings)
+            # Islands come from per-corner selection, which in vertex/edge mode also
+            # holds corners of partly selected faces. Keep only the corners this
+            # action targets (and records for undo / gradient bookkeeping).
+            targeted = {loop for loop, _uv in all_selected_loops}
             applied = False
             for island in islands:
                 island_loops = [
-                    (loop, loop[uv_layer].uv.copy()) for loop in island]
+                    (loop, loop[uv_layer].uv.copy()) for loop in island if loop in targeted]
                 if not island_loops:
                     continue
                 fit_loops_to_cell(
@@ -3306,7 +3341,8 @@ class UV_OT_draw_path_gradient(bpy.types.Operator):
         if event.type in {'RET', 'NUMPAD_ENTER'} and event.value == 'PRESS':
             self.finish_painting(context)
             self.report({'INFO'}, "Painting finished")
-            return {'FINISHED'}
+            # Like Esc/RMB: no empty undo step when nothing was painted.
+            return self.exit_result()
 
         if event.type == 'TIMER':
             now = time.perf_counter()
@@ -4237,12 +4273,24 @@ def matching_gradient(obj, uv, loops):
     return record
 
 
-def remember_paint_step(obj, uv, loops, before):
+def remember_paint_step(obj, uv, loops, before, symmetry_blocked=()):
+    """Every committed UV change ends here: mirror it (Symmetry), then record undo.
+
+    Symmetry runs even when nothing changed on the painted side, so re-applying a
+    cell after enabling an axis also brings the mirrored side in line.
+    """
+    mirrored, mirrored_before = apply_paint_symmetry(obj, uv, loops, symmetry_blocked)
     painter = active_gradient_painter
     if painter is None or painter.obj != obj:
         return
     bm = bmesh.from_edit_mesh(obj.data)
-    after = gradient_corner_states(loops, uv, gradient_layers(bm))
+    layers = gradient_layers(bm)
+    after = gradient_corner_states(loops, uv, layers)
+    if mirrored:
+        before = dict(before)
+        for key, state in mirrored_before.items():
+            before.setdefault(key, state)
+        after.update(gradient_corner_states(mirrored, uv, layers))
     if before == after:
         return
     painter.session_modified = True
@@ -5419,10 +5467,867 @@ class UV_OT_snap_to_grid(bpy.types.Operator):
 
         return {'RUNNING_MODAL'}
 
+# --- Matching pieces and symmetry ---
+#
+# Both features copy corner UVs from a source set of faces onto a congruent set
+# elsewhere in the same mesh. A match is an object-space transform (rotation,
+# optionally mirrored and uniformly scaled, plus translation) that carries every
+# source face onto a visible target face. Corners are paired by position, not by
+# topology, so a piece may consist of several loose parts, and split pieces whose
+# border vertices coincide still resolve to their own faces.
+#
+# Saved (editable) gradients travel along: every target receives its own copy of
+# the gradient record with the stroke transformed into the target's place.
+
+MATCH_MIRROR_W = Matrix.Diagonal((1.0, -1.0, 1.0))
+MATCH_PASS_EVENTS = PASSIVE_EVENT_TYPES | {
+    'NUMPAD_0', 'NUMPAD_1', 'NUMPAD_2', 'NUMPAD_3', 'NUMPAD_4', 'NUMPAD_5',
+    'NUMPAD_6', 'NUMPAD_7', 'NUMPAD_8', 'NUMPAD_9', 'NUMPAD_PERIOD',
+    'NUMPAD_PLUS', 'NUMPAD_MINUS', 'NUMPAD_SLASH', 'NUMPAD_ASTERIX',
+    'HOME', 'NDOF_MOTION', 'NDOF_BUTTON_FIT', 'ACCENT_GRAVE',
+}
+active_match_session = None
+match_draw_handle = None
+_corner_index_cache = None
+
+
+class MeshCornerIndex:
+    """Find faces by the positions of their corners (KD-tree over edit-mesh verts)."""
+
+    def __init__(self, bm):
+        self.bm = bm
+        bm.verts.index_update()
+        bm.verts.ensure_lookup_table()
+        bm.normal_update()
+        self.verts = bm.verts
+        self.kd = KDTree(len(bm.verts))
+        for vert in bm.verts:
+            self.kd.insert(vert.co, vert.index)
+        self.kd.balance()
+
+    def face_onto(self, face, matrix, tolerance, blocked):
+        """(target face, target corners parallel to face.loops) at matrix @ face, or None.
+
+        Every corner may have several coincident candidates (split pieces), so
+        the target is the face that owns one candidate per corner. A target whose
+        normal agrees with the transformed source normal wins over one that does
+        not (coincident double-sided faces).
+        """
+        wanted = []
+        for loop in face.loops:
+            found = {index for _co, index, _dist in self.kd.find_range(matrix @ loop.vert.co, tolerance)}
+            if not found:
+                return None
+            wanted.append(found)
+        count = len(wanted)
+        normal = matrix.to_3x3() @ face.normal
+        fallback = None
+        seen = set()
+        for index in wanted[0]:
+            for target in self.verts[index].link_faces:
+                if target in seen:
+                    continue
+                seen.add(target)
+                if target.hide or target in blocked or len(target.loops) != count:
+                    continue
+                corners = []
+                for candidates in wanted:
+                    corner = next((loop for loop in target.loops
+                                   if loop.vert.index in candidates and loop not in corners), None)
+                    if corner is None:
+                        break
+                    corners.append(corner)
+                else:
+                    if target.normal.dot(normal) > 0.0 or normal.length_squared <= 1e-24:
+                        return target, corners
+                    if fallback is None:
+                        fallback = (target, corners)
+        return fallback
+
+
+def cached_corner_index(obj, bm):
+    """Reuse the KD-tree while painting until the painter sees a geometry change."""
+    global _corner_index_cache
+    painter = active_gradient_painter
+    key = None
+    if painter is not None and getattr(painter, "obj", None) == obj:
+        key = (obj.data.as_pointer(), id(painter), getattr(painter, "geometry_stamp", 0),
+               len(bm.verts), len(bm.edges), len(bm.faces))
+    cached = _corner_index_cache
+    if (key is not None and cached is not None and cached[0] == key
+            and cached[1].bm.is_valid and cached[1].bm == bm):
+        return cached[1]
+    index = MeshCornerIndex(bm)
+    _corner_index_cache = (key, index) if key is not None else None
+    return index
+
+
+def vertices_diagonal(verts):
+    if not verts:
+        return 0.0
+    xs, ys, zs = zip(*(tuple(v.co) for v in verts))
+    return (Vector((max(xs), max(ys), max(zs))) - Vector((min(xs), min(ys), min(zs)))).length
+
+
+def transformed_gradient_record(record, matrix):
+    """A saved gradient moved by an object-space transform (stroke, handles, normal)."""
+    result = copy.deepcopy(record)
+    result["path"] = [list(matrix @ Vector(point)) for point in record.get("path", [])]
+    result["nodes"] = [[list(matrix @ Vector(point)) for point in node] for node in record.get("nodes", [])]
+    if record.get("circle_normal"):
+        # Stored like a covector (see PaletteGradientEdit.event), so it moves by M^-T.
+        normal = matrix.to_3x3().inverted_safe().transposed() @ Vector(record["circle_normal"])
+        if normal.length > 1e-12:
+            result["circle_normal"] = list(normal.normalized())
+    return result
+
+
+def copy_corners(mesh, uv, layers, groups):
+    """Copy UVs (and gradient association) along (matrix, [(source, target)]) groups.
+
+    A source corner still on its saved gradient gives its target a transformed
+    copy of that gradient (one new record per gradient and group); any other
+    target loses the gradient it had on this UV map.
+    """
+    uv_name = uv.name
+    for matrix, pairs in groups:
+        new_ids = {}
+        for source, target in pairs:
+            value = source[uv].uv.copy()
+            target[uv].uv = value
+            if layers is None:
+                continue
+            ids, us, vs = layers
+            record_id = source[ids]
+            new_id = 0
+            if (record_id > 0 and abs(value.x - source[us]) <= 1e-5
+                    and abs(value.y - source[vs]) <= 1e-5):
+                if record_id not in new_ids:
+                    record = load_gradient_record(mesh, record_id)
+                    new_ids[record_id] = (
+                        store_gradient_record(mesh, transformed_gradient_record(record, matrix))
+                        if record is not None and record.get("layer") == uv_name else 0)
+                new_id = new_ids[record_id]
+            if new_id:
+                target[ids] = new_id
+                target[us] = value.x
+                target[vs] = value.y
+            elif target[ids] > 0:
+                old = load_gradient_record(mesh, target[ids])
+                if old is None or old.get("layer") == uv_name:
+                    target[ids] = 0
+
+
+def collect_gradient_garbage(obj, bm):
+    group = obj.data.get(GRADIENT_META_KEY)
+    if group is not None and len(group.keys()) > GRADIENT_GC_THRESHOLD:
+        collect_unused_gradient_records(
+            obj.data, bm, keep=history_gradient_ids(active_gradient_painter))
+
+
+# --- Symmetry ---
+
+def symmetry_matrices(scene):
+    """Object-space reflections for the enabled axes (X and Y also give XY)."""
+    flags = getattr(scene, "snap_uv_symmetry", None)
+    if flags is None:
+        return []
+    axes = [axis for axis in range(3) if flags[axis]]
+    matrices = []
+    for mask in range(1, 1 << len(axes)):
+        scale = [1.0, 1.0, 1.0, 1.0]
+        for bit, axis in enumerate(axes):
+            if mask & (1 << bit):
+                scale[axis] = -1.0
+        matrices.append(Matrix.Diagonal(scale))
+    return matrices
+
+
+def apply_paint_symmetry(obj, uv, loops, blocked=()):
+    """Mirror freshly painted corners onto their symmetric counterparts.
+
+    Runs after every committed paint step (see remember_paint_step). Faces that
+    were painted themselves, or that mirror onto themselves (on the symmetry
+    plane), are never overwritten. Returns ([(loop, uv_before)], states_before).
+    """
+    try:
+        scene = bpy.context.scene
+    except AttributeError:
+        return [], {}
+    matrices = symmetry_matrices(scene) if scene is not None else []
+    if not matrices or not loops or obj is None or obj.mode != 'EDIT':
+        return [], {}
+    bm = bmesh.from_edit_mesh(obj.data)
+    painted = {loop for loop, _ in loops if loop.is_valid and not loop.face.hide}
+    if not painted:
+        return [], {}
+    faces = {loop.face for loop in painted}
+    size = vertices_diagonal({vert for face in faces for vert in face.verts})
+    tolerance = max(1e-6, size * scene.snap_uv_symmetry_tolerance)
+    index = cached_corner_index(obj, bm)
+    blocked = faces | set(blocked)
+    written = set()
+    groups = []
+    for matrix in matrices:
+        pairs = []
+        for face in faces:
+            found = index.face_onto(face, matrix, tolerance, blocked)
+            if found is None:
+                continue
+            for source, target in zip(face.loops, found[1]):
+                if source in painted and target not in written:
+                    written.add(target)
+                    pairs.append((source, target))
+        if pairs:
+            groups.append((matrix, pairs))
+    if not groups:
+        return [], {}
+    bm.faces.index_update()
+    bm.verts.index_update()
+    layers = gradient_layers(bm)
+    mirrored = [(target, target[uv].uv.copy()) for _matrix, pairs in groups for _source, target in pairs]
+    before = gradient_corner_states(mirrored, uv, layers)
+    copy_corners(obj.data, uv, layers, groups)
+    bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+    return mirrored, before
+
+
+# --- Matching pieces ---
+
+class PieceMatch:
+    __slots__ = ("faces", "key", "matrix", "pairs", "mirrored", "score", "center")
+
+    def __init__(self, faces, matrix, pairs, mirrored, score, center):
+        self.faces = faces
+        self.key = frozenset(face.index for face in faces)
+        self.matrix = matrix
+        self.pairs = pairs
+        self.mirrored = mirrored
+        self.score = score
+        self.center = center
+
+
+def piece_components(faces, scope):
+    """face -> piece id for visible faces, split at seams ('SEAMS') or only by gaps ('LINKED')."""
+    component, sizes = {}, []
+    for face in faces:
+        if face in component:
+            continue
+        piece = len(sizes)
+        component[face] = piece
+        stack, count = [face], 0
+        while stack:
+            current = stack.pop()
+            count += 1
+            for edge in current.edges:
+                if edge.hide or (scope == 'SEAMS' and edge.seam):
+                    continue
+                for neighbor in edge.link_faces:
+                    if not neighbor.hide and neighbor not in component:
+                        component[neighbor] = piece
+                        stack.append(neighbor)
+        sizes.append(count)
+    return component, sizes
+
+
+def sorted_edge_lengths(face):
+    return sorted((loop.link_loop_next.vert.co - loop.vert.co).length for loop in face.loops)
+
+
+def face_frame(face, anchor, center):
+    """Orthonormal columns (u, normal x u, normal); u points at the anchor corner."""
+    normal = face.normal
+    u = anchor - center
+    u -= normal * u.dot(normal)
+    if u.length <= 1e-12 or normal.length <= 1e-12:
+        return None
+    u.normalize()
+    return Matrix((u, normal.cross(u), normal)).transposed()
+
+
+def find_matching_pieces(bm, selected_faces, scope='FACES', allow_mirror=True,
+                         allow_scale=False, tolerance=0.002):
+    """Return (source faces, [PieceMatch]) for every congruent copy of the selection.
+
+    'FACES' matches the selected faces as they are. 'SEAMS' / 'LINKED' first grow
+    the selection to whole pieces and only accept targets made of whole pieces.
+    Several transforms may fit a symmetric piece; the least rotated one wins (so a
+    gradient keeps its "up" across cube sides), and a non-mirrored one wins over
+    a mirrored one. Matches never overlap each other or the source.
+    """
+    visible = [face for face in bm.faces if not face.hide]
+    source = {face for face in selected_faces if face.is_valid and not face.hide}
+    component = sizes = None
+    if scope != 'FACES':
+        component, sizes = piece_components(visible, scope)
+        pieces = {component[face] for face in source}
+        source = {face for face in visible if component[face] in pieces}
+    if not source:
+        return source, []
+    diagonal = vertices_diagonal({vert for face in source for vert in face.verts})
+    if diagonal <= 1e-12:
+        return source, []
+    length_tolerance = max(1e-7, tolerance * diagonal)
+    index = MeshCornerIndex(bm)  # also refreshes face normals used by the frames
+
+    # Candidate seed faces: same corner count and edge lengths (scale-free if allowed).
+    by_count = {}
+    for face in visible:
+        if face not in source:
+            by_count.setdefault(len(face.loops), []).append(face)
+    arrays = {}
+    for count, faces in by_count.items():
+        lengths = np.array([sorted_edge_lengths(face) for face in faces], dtype=np.float64)
+        arrays[count] = (faces, lengths)
+
+    def candidates_for(face):
+        group = arrays.get(len(face.loops))
+        if group is None:
+            return []
+        faces, lengths = group
+        wanted = np.array(sorted_edge_lengths(face), dtype=np.float64)
+        perimeter = wanted.sum()
+        if perimeter <= 1e-12:
+            return []
+        if allow_scale:
+            totals = lengths.sum(axis=1, keepdims=True)
+            totals[totals <= 1e-12] = np.inf
+            close = np.all(np.abs(lengths / totals - wanted / perimeter)
+                           <= length_tolerance / perimeter, axis=1)
+        else:
+            close = np.all(np.abs(lengths - wanted) <= length_tolerance, axis=1)
+        result = [faces[i] for i in np.nonzero(close)[0]]
+        if component is not None:
+            size = sizes[component[face]]
+            result = [other for other in result if sizes[component[other]] == size]
+        return result
+
+    # The seed is the most distinctive (fewest candidates) non-degenerate source face.
+    ordered = sorted(source, key=lambda face: -face.calc_area())
+    step = max(1, len(ordered) // 24)
+    seed, candidates = None, None
+    for face in ordered[::step][:24]:
+        if face.calc_area() <= 1e-14 or face.normal.length <= 1e-12:
+            continue
+        found = candidates_for(face)
+        if seed is None or len(found) < len(candidates):
+            seed, candidates = face, found
+            if not found:
+                break
+    if seed is None or not candidates:
+        return source, []
+
+    seed_loops = list(seed.loops)
+    count = len(seed_loops)
+    seed_points = [loop.vert.co.copy() for loop in seed_loops]
+    seed_center = sum(seed_points, Vector()) / count
+    anchor = max(range(count), key=lambda i: (seed_points[i] - seed_center).length_squared)
+    seed_frame = face_frame(seed, seed_points[anchor], seed_center)
+    if seed_frame is None:
+        return source, []
+    seed_rows = seed_frame.transposed()
+    seed_radius = math.sqrt(sum((p - seed_center).length_squared for p in seed_points) / count)
+    # Nearby faces first, so a wrong hypothesis fails within a few lookups.
+    centers = {face: face.calc_center_median() for face in source}
+    source_order = sorted(source, key=lambda face: (centers[face] - seed_center).length_squared)
+    source_center = sum(centers.values(), Vector()) / len(centers)
+    up = Vector((0.0, 0.0, 1.0))
+
+    def map_source(matrix, tol):
+        blocked = set(source)
+        targets, pairs = [], []
+        for face in source_order:
+            found = index.face_onto(face, matrix, tol, blocked)
+            if found is None:
+                return None
+            target, corners = found
+            blocked.add(target)
+            targets.append(target)
+            pairs.extend(zip(face.loops, corners))
+        return targets, pairs
+
+    best = {}
+    for candidate in candidates:
+        loops = list(candidate.loops)
+        points = [loop.vert.co for loop in loops]
+        center = sum(points, Vector()) / count
+        radius = math.sqrt(sum((p - center).length_squared for p in points) / count)
+        if allow_scale:
+            scale = radius / seed_radius if seed_radius > 1e-12 else 1.0
+        else:
+            if abs(radius - seed_radius) > length_tolerance:
+                continue
+            scale = 1.0
+        tol = length_tolerance * scale
+        for mirrored in ((False, True) if allow_mirror else (False,)):
+            for shift in range(count):
+                if mirrored:
+                    order = [loops[(shift - i) % count] for i in range(count)]
+                else:
+                    order = [loops[(shift + i) % count] for i in range(count)]
+                frame = face_frame(candidate, order[anchor].vert.co, center)
+                if frame is None:
+                    continue
+                rotation = (frame @ MATCH_MIRROR_W @ seed_rows) if mirrored else (frame @ seed_rows)
+                matrix = (Matrix.Translation(center) @ (rotation * scale).to_4x4()
+                          @ Matrix.Translation(-seed_center))
+                if any((matrix @ p - loop.vert.co).length > tol for p, loop in zip(seed_points, order)):
+                    continue
+                mapped = map_source(matrix, tol)
+                if mapped is None:
+                    continue
+                targets, pairs = mapped
+                if component is not None:
+                    pieces = {component[face] for face in targets}
+                    if sum(sizes[piece] for piece in pieces) != len(targets):
+                        continue
+                trace = rotation[0][0] + rotation[1][1] + rotation[2][2]
+                score = (mirrored, -round(trace, 6), -round((rotation @ up).z, 6))
+                match = PieceMatch(targets, matrix, pairs, mirrored, score,
+                                   sum((t.calc_center_median() for t in targets), Vector()) / len(targets))
+                previous = best.get(match.key)
+                if previous is None or match.score < previous.score:
+                    best[match.key] = match
+
+    matches, taken = [], set()
+    for match in sorted(best.values(), key=lambda m: (m.score[0], (m.center - source_center).length)):
+        if taken.isdisjoint(match.faces):
+            taken.update(match.faces)
+            matches.append(match)
+    return source, matches
+
+
+def draw_match_overlay():
+    session = active_match_session
+    if session is None:
+        return
+    try:
+        session.draw_overlay(bpy.context)
+    except ReferenceError:
+        pass
+
+
+def ensure_match_overlay():
+    global match_draw_handle
+    if match_draw_handle is None:
+        match_draw_handle = bpy.types.SpaceView3D.draw_handler_add(
+            draw_match_overlay, (), 'WINDOW', 'POST_VIEW')
+
+
+def remove_match_overlay():
+    global match_draw_handle
+    if match_draw_handle is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(match_draw_handle, 'WINDOW')
+        match_draw_handle = None
+
+
+def reset_match_session():
+    global active_match_session, _corner_index_cache
+    session = active_match_session
+    active_match_session = None
+    _corner_index_cache = None
+    if session is not None:
+        try:
+            session.cleanup(bpy.context)
+        except (ReferenceError, AttributeError, RuntimeError):
+            pass
+    remove_match_overlay()
+
+
+def match_settings_signature(scene):
+    return (scene.snap_uv_match_scope, bool(scene.snap_uv_match_mirror),
+            bool(scene.snap_uv_match_scale), round(scene.snap_uv_match_tolerance, 7))
+
+
+class UV_OT_copy_to_matching(bpy.types.Operator):
+    """Copy the selected piece's UVs and gradients to every identical piece of the mesh.
+    Click highlighted pieces to exclude or include them, Enter applies"""
+    bl_idname = "uv.pigmi_copy_to_matching"
+    bl_label = "Copy UVs to Matching Pieces"
+    bl_options = {'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.edit_object
+        return obj is not None and obj.type == 'MESH' and obj.mode == 'EDIT'
+
+    def invoke(self, context, event):
+        global active_match_session
+        if active_match_session is not None:
+            self.report({'WARNING'}, "Matching is already running")
+            return {'CANCELLED'}
+        area, region, rv3d = view3d_under_mouse(context, event)
+        if area is None:
+            area, region, rv3d = first_view3d(context)
+        if area is None:
+            self.report({'ERROR'}, "Open a 3D View to pick matching pieces")
+            return {'CANCELLED'}
+        self.area, self.region, self.rv3d = area, region, rv3d
+        self.obj = context.edit_object
+        bm = bmesh.from_edit_mesh(self.obj.data)
+        bm.faces.index_update()
+        selected = [face for face in bm.faces if face.select and not face.hide]
+        if not selected:
+            self.report({'ERROR'}, "Select the reference piece (faces) first")
+            return {'CANCELLED'}
+        self.selected_indices = [face.index for face in selected]
+        self.excluded = set()
+        self.hover = None
+        self.drag_state = None
+        self.overlay_key = None
+        self.overlay_batches = []
+        self.compute_stamp = 0
+        self.timer = None
+        self.requested_action = None  # set by the panel buttons (UV_OT_matching_action)
+        if not self.compute(context, report=True):
+            return {'CANCELLED'}
+        active_match_session = self
+        ensure_match_overlay()
+        self.timer = context.window_manager.event_timer_add(0.1, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        self.update_header(context)
+        return {'RUNNING_MODAL'}
+
+    # -- matching --
+
+    def compute(self, context, report=False):
+        scene = context.scene
+        bm = bmesh.from_edit_mesh(self.obj.data)
+        bm.faces.index_update()
+        bm.faces.ensure_lookup_table()
+        selected = [bm.faces[i] for i in self.selected_indices if i < len(bm.faces)]
+        source, matches = find_matching_pieces(
+            bm, selected, scene.snap_uv_match_scope, scene.snap_uv_match_mirror,
+            scene.snap_uv_match_scale, scene.snap_uv_match_tolerance)
+        self.bm = bm
+        self.source = source
+        self.matches = matches
+        self.signature = match_settings_signature(scene)
+        self.topology = (len(bm.verts), len(bm.edges), len(bm.faces))
+        keys = {match.key for match in matches}
+        self.excluded &= keys
+        self.match_for = {face: number for number, match in enumerate(matches) for face in match.faces}
+        self.match_for.update({face: -1 for face in source})
+        visible = [face for face in bm.faces if not face.hide]
+        bm.verts.index_update()
+        self.pick_faces = visible
+        self.bvh = BVHTree.FromPolygons(
+            [vert.co.copy() for vert in bm.verts],
+            [[vert.index for vert in face.verts] for face in visible], all_triangles=False) if visible else None
+        wanted = set(self.match_for)
+        self.triangles = {}
+        for tri in bm.calc_loop_triangles():
+            if tri[0].face in wanted:
+                self.triangles.setdefault(tri[0].face, []).append(tri)
+        self.compute_stamp += 1
+        self.overlay_key = None
+        if report:
+            if not matches:
+                self.report({'WARNING'}, "No matching pieces found. Try another Piece type, Mirror "
+                                         "Copies, Scaled Copies or a higher Match Tolerance")
+                return False
+            mirrored = sum(1 for match in matches if match.mirrored)
+            self.report({'INFO'}, f"{len(matches)} matching pieces ({mirrored} mirrored). Click pieces to "
+                                  "exclude them, then press Apply in the panel (or Enter)")
+        return True
+
+    def valid(self):
+        # Cheap enough for every event; we consume edits, so only undo/topology can interfere.
+        bm = self.bm
+        return bm.is_valid and self.topology == (len(bm.verts), len(bm.edges), len(bm.faces))
+
+    def included(self):
+        return [match for match in self.matches if match.key not in self.excluded]
+
+    # -- UI --
+
+    def update_header(self, context):
+        total = len(self.matches)
+        text = (f"Copy to Matching: {total - len(self.excluded)}/{total} pieces  |  "
+                "Enter/Space or panel Apply: copy  LMB/drag: exclude/include  A: all  "
+                "Alt+A: none  Ctrl+I: invert  S: select them  Esc/RMB: cancel")
+        try:
+            self.area.header_text_set(text)
+        except (ReferenceError, AttributeError):
+            pass
+        redraw_all_areas(context)
+
+    def cleanup(self, context):
+        if self.timer is not None:
+            try:
+                context.window_manager.event_timer_remove(self.timer)
+            except (ReferenceError, ValueError):
+                pass
+            self.timer = None
+        try:
+            self.area.header_text_set(None)
+        except (ReferenceError, AttributeError):
+            pass
+        self.overlay_batches = []
+
+    def finish(self, context):
+        global active_match_session
+        if active_match_session is self:
+            active_match_session = None
+        self.cleanup(context)
+        remove_match_overlay()
+        painter = active_gradient_painter
+        if painter is not None:
+            painter.gradient_signature = None
+            painter.last_applied_selection_signature = None
+            painter.mark_scene_dirty()
+        redraw_all_areas(context)
+
+    def hit_match(self, context, event):
+        area, region, rv3d = view3d_under_mouse(context, event)
+        if area is None or self.bvh is None:
+            return None
+        mouse = (event.mouse_x - region.x, event.mouse_y - region.y)
+        inverse = self.obj.matrix_world.inverted_safe()
+        origin = inverse @ view3d_utils.region_2d_to_origin_3d(region, rv3d, mouse)
+        direction = (inverse.to_3x3() @ view3d_utils.region_2d_to_vector_3d(region, rv3d, mouse)).normalized()
+        index = self.bvh.ray_cast(origin, direction)[2]
+        if index is None:
+            return None
+        number = self.match_for.get(self.pick_faces[index])
+        return number if number is not None and number >= 0 else None
+
+    def set_included(self, number, include):
+        key = self.matches[number].key
+        if include:
+            self.excluded.discard(key)
+        else:
+            self.excluded.add(key)
+
+    # -- actions --
+
+    def apply(self, context):
+        included = self.included()
+        if not included:
+            self.report({'WARNING'}, "All matching pieces are excluded" if self.matches
+                        else "No matching pieces with the current settings")
+            return False
+        obj = self.obj
+        bm = self.bm
+        uv = bm.loops.layers.uv.active
+        if uv is None:
+            self.report({'ERROR'}, "The mesh has no UV map")
+            return False
+        bm.faces.index_update()
+        bm.verts.index_update()
+        layers = gradient_layers(bm)
+        targets = [(target, target[uv].uv.copy()) for match in included for _source, target in match.pairs]
+        before = gradient_corner_states(targets, uv, layers, original_uv=True)
+        copy_corners(obj.data, uv, layers, [(match.matrix, match.pairs) for match in included])
+        bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+        collect_gradient_garbage(obj, bm)
+        # Symmetry also mirrors the new targets, but never back onto the reference.
+        remember_paint_step(obj, uv, targets, before, symmetry_blocked=self.source)
+        self.report({'INFO'}, f"UVs copied to {len(included)} pieces")
+        return True
+
+    def select_included(self, context):
+        bm = self.bm
+        for sequence in (bm.faces, bm.edges, bm.verts):
+            for element in sequence:
+                element.select = False
+        chosen = set(self.source)
+        for match in self.included():
+            chosen.update(match.faces)
+        for face in chosen:
+            face.select_set(True)
+        bm.select_history.clear()
+        bmesh.update_edit_mesh(self.obj.data, loop_triangles=False, destructive=False)
+        painter = active_gradient_painter
+        stage = getattr(painter, "easy_selection", None) if painter is not None else None
+        if stage is not None:
+            stage.pending_native = True
+        self.report({'INFO'}, f"Selected the reference and {len(self.included())} matching pieces")
+
+    def run_action(self, context, action):
+        """Finish the session with Apply / Select / Cancel (keys or panel buttons)."""
+        if action == 'APPLY':
+            applied = self.valid() and self.apply(context)
+            self.finish(context)
+            return {'FINISHED'} if applied else {'CANCELLED'}
+        if action == 'SELECT' and self.valid():
+            self.select_included(context)
+            self.finish(context)
+            return {'FINISHED'}
+        self.report({'INFO'}, "Copy to matching cancelled")
+        self.finish(context)
+        return {'CANCELLED'}
+
+    def modal(self, context, event):
+        if (active_match_session is not self or context.edit_object != self.obj
+                or self.obj.mode != 'EDIT'):
+            self.finish(context)
+            return {'CANCELLED'}
+        action, self.requested_action = self.requested_action, None
+        if action is not None:
+            return self.run_action(context, action)
+        if event.type == 'TIMER':
+            if match_settings_signature(context.scene) != self.signature:
+                self.compute(context)
+                self.update_header(context)
+            return {'PASS_THROUGH'}
+        if not self.valid():
+            self.report({'WARNING'}, "The mesh changed: matching stopped")
+            self.finish(context)
+            return {'CANCELLED'}
+        if event.type in MATCH_PASS_EVENTS and event.type != 'MOUSEMOVE':
+            return {'PASS_THROUGH'}
+        if mouse_over_ui_region(context, event):
+            # Panel settings stay editable; the timer picks up their changes.
+            self.drag_state = None
+            if self.hover is not None:
+                self.hover = None
+                redraw_view3d_areas(context)
+            return {'PASS_THROUGH'}
+        if event.type in {'ESC', 'RIGHTMOUSE'}:
+            # Finish on release so the release cannot reach (and end) Painting.
+            if event.value == 'RELEASE':
+                return self.run_action(context, 'CANCEL')
+            return {'RUNNING_MODAL'}
+        if event.type in {'RET', 'NUMPAD_ENTER', 'SPACE'}:
+            if event.value == 'PRESS':
+                return self.run_action(context, 'APPLY')
+            return {'RUNNING_MODAL'}
+        if event.type == 'S' and event.value == 'PRESS' and not primary_modifier(event):
+            return self.run_action(context, 'SELECT')
+        if event.type == 'A' and event.value == 'PRESS':
+            self.excluded = {match.key for match in self.matches} if event.alt else set()
+            self.update_header(context)
+            return {'RUNNING_MODAL'}
+        if event.type == 'I' and event.value == 'PRESS' and primary_modifier(event):
+            self.excluded = {match.key for match in self.matches} - self.excluded
+            self.update_header(context)
+            return {'RUNNING_MODAL'}
+        if event.type == 'LEFTMOUSE':
+            if event.alt:
+                return {'PASS_THROUGH'}  # emulated 3-button orbit
+            if event.value == 'PRESS':
+                number = self.hit_match(context, event)
+                if number is not None:
+                    self.drag_state = self.matches[number].key in self.excluded
+                    self.set_included(number, self.drag_state)
+                    self.update_header(context)
+            elif event.value == 'RELEASE':
+                self.drag_state = None
+            return {'RUNNING_MODAL'}
+        if event.type in {'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE'}:
+            number = self.hit_match(context, event)
+            changed = number != self.hover
+            self.hover = number
+            if self.drag_state is not None and number is not None:
+                was = self.matches[number].key in self.excluded
+                self.set_included(number, self.drag_state)
+                changed = changed or was == self.drag_state
+                if was == self.drag_state:
+                    self.update_header(context)
+            if changed:
+                redraw_view3d_areas(context)
+            return {'PASS_THROUGH'}
+        return {'RUNNING_MODAL'}
+
+    def draw_overlay(self, context):
+        if context.edit_object != self.obj or not self.bm.is_valid:
+            return
+        import gpu
+        from gpu_extras.batch import batch_for_shader
+        shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+        matrix = self.obj.matrix_world
+        key = (self.compute_stamp, frozenset(self.excluded), self.hover,
+               tuple(v for row in matrix for v in row))
+        if key != self.overlay_key:
+            self.overlay_key = key
+            self.overlay_batches = []
+            included = [m for m in self.matches if m.key not in self.excluded]
+            excluded = [m for m in self.matches if m.key in self.excluded]
+            hover = [self.matches[self.hover]] if self.hover is not None and self.hover < len(self.matches) else []
+            categories = (
+                ([self.source], (1.0, 0.6, 0.15), 0.14, 0.95),
+                ([m.faces for m in included], (0.2, 0.85, 1.0), 0.12, 0.9),
+                ([m.faces for m in excluded], (0.9, 0.3, 0.35), 0.04, 0.6),
+                ([m.faces for m in hover], (1.0, 1.0, 1.0), 0.14, 0.0),
+            )
+            for face_sets, color, fill_alpha, line_alpha in categories:
+                fill, lines = [], []
+                for faces in face_sets:
+                    faces = set(faces)
+                    for face in faces:
+                        if not face.is_valid:
+                            continue
+                        for tri in self.triangles.get(face, ()):
+                            fill.extend(matrix @ loop.vert.co for loop in tri)
+                        for edge in face.edges:
+                            if sum(1 for other in edge.link_faces if other in faces) != 2:
+                                lines.extend(matrix @ vert.co for vert in edge.verts)
+                if fill and fill_alpha > 0.0:
+                    self.overlay_batches.append(
+                        (batch_for_shader(shader, 'TRIS', {'pos': fill}), (*color, fill_alpha)))
+                if lines and line_alpha > 0.0:
+                    self.overlay_batches.append(
+                        (batch_for_shader(shader, 'LINES', {'pos': lines}), (*color, line_alpha)))
+        if not self.overlay_batches:
+            return
+        gpu.state.blend_set('ALPHA')
+        gpu.state.depth_test_set('LESS_EQUAL')
+        gpu.state.depth_mask_set(False)
+        gpu.matrix.push_projection()
+        try:
+            projection = gpu.matrix.get_projection_matrix().copy()
+            projection[2] = projection[2] - projection[3] * 2e-5
+            gpu.matrix.load_projection_matrix(projection)
+            shader.bind()
+            for batch, color in self.overlay_batches:
+                shader.uniform_float('color', color)
+                batch.draw(shader)
+        finally:
+            gpu.matrix.pop_projection()
+            gpu.state.depth_mask_set(True)
+            gpu.state.depth_test_set('NONE')
+            gpu.state.blend_set('NONE')
+
+
+class UV_OT_matching_action(bpy.types.Operator):
+    """Finish the running Copy to Matching session"""
+    bl_idname = "uv.pigmi_matching_action"
+    bl_label = "Matching Pieces"
+    bl_options = {'INTERNAL'}
+
+    action: bpy.props.EnumProperty(
+        items=[('APPLY', "Apply", "Copy the reference UVs to every included (blue) piece"),
+               ('SELECT', "Select", "Select the reference and the included pieces instead of copying"),
+               ('CANCEL', "Cancel", "Stop without changing anything")])
+
+    @classmethod
+    def poll(cls, context):
+        return active_match_session is not None
+
+    @classmethod
+    def description(cls, context, properties):
+        return {'APPLY': "Copy the reference UVs to every included (blue) piece. Shortcut: Enter / Space",
+                'SELECT': "Select the reference and the included pieces instead of copying. Shortcut: S",
+                'CANCEL': "Stop without changing anything. Shortcut: Esc / RMB"}[properties.action]
+
+    def execute(self, context):
+        session = active_match_session
+        try:
+            # The session's modal handler acts on its next event (its timer runs at 10 Hz),
+            # so the undo step and the cleanup stay in one place.
+            session.requested_action = self.action
+        except (ReferenceError, AttributeError):
+            reset_match_session()
+            return {'CANCELLED'}
+        redraw_all_areas(context)
+        return {'FINISHED'}
+
+
 # --- UI Panel ---
 
 class UV_PT_snap_to_grid_panel(bpy.types.Panel):
-    """Snap UV Panel in the 3D View"""
+    """Pigmi UV to Palette: start/stop painting and the current state"""
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Snap UV"
@@ -5436,120 +6341,279 @@ class UV_PT_snap_to_grid_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        layout.prop(scene, "snap_uv_texture_width")
-        layout.prop(scene, "snap_uv_texture_height")
-        layout.prop(scene, "snap_uv_cell_width")
-        layout.prop(scene, "snap_uv_cell_height")
-        layout.separator()
-        layout.label(text="Margins (fraction):")
-        layout.prop(scene, "snap_uv_margin_x")
-        layout.prop(scene, "snap_uv_margin_y")
-        layout.separator()
-        layout.label(text="Additional Options:")
-        layout.prop(scene, "snap_uv_preserve")
-        layout.prop(scene, "snap_uv_independent")
-        layout.separator()
-        layout.label(text="Painting:")
-        layout.prop(scene, "snap_uv_easy_mode")
-        if scene.snap_uv_easy_mode:
-            layout.prop(scene, "snap_uv_easy_variant")
-            layout.prop(scene, "snap_uv_easy_drag_gradient")
-            layout.prop(scene, "snap_uv_easy_through")
-        layout.prop(scene, "snap_uv_path_style")
-        layout.prop(scene, "snap_uv_show_gradients")
-        layout.prop(scene, "snap_uv_gradient_snap")
-        layout.prop(scene, "snap_uv_path_stabilizer")
-        layout.prop(scene, "snap_uv_gradient_direction")
-        layout.separator()
-        box = layout.box()
-        box.prop(scene, "snap_uv_cavity_expanded", text="Cavity / Fake AO",
-                 icon='TRIA_DOWN' if scene.snap_uv_cavity_expanded else 'TRIA_RIGHT',
-                 emboss=False)
-        if scene.snap_uv_cavity_expanded:
-            box.prop(scene, "snap_uv_cavity_strength")
-            box.prop(scene, "snap_uv_edge_strength")
-            box.prop(scene, "snap_uv_edge_threshold")
-            box.prop(scene, "snap_uv_edge_falloff")
-            box.prop(scene, "snap_uv_cavity_smooth")
-            box.prop(scene, "snap_uv_cavity_contrast")
-            box.prop(scene, "snap_uv_cavity_bias")
-            box.prop(scene, "snap_uv_cavity_invert")
-            box.prop(scene, "snap_uv_cavity_auto_preview")
         if PIGMI_STATE.painting_active:
-            stage = active_gradient_painter.easy_selection if active_gradient_painter else None
+            painter = active_gradient_painter
+            col = layout.column(align=True)
+            if painter is not None and getattr(painter, "target_ready", False):
+                col.label(text=f"Cell: column {painter.target_cell_x + 1}, row {painter.target_cell_y_top + 1}",
+                          icon='CHECKMARK')
+            stage = painter.easy_selection if painter is not None else None
             if scene.snap_uv_easy_mode and (scene.snap_uv_easy_variant == 'SELECT' or stage is not None):
                 if stage is not None and stage.confirmed:
-                    layout.label(text=f"Ready: {len(stage.groups)} pieces", icon='CHECKMARK')
+                    col.label(text=f"Ready: {len(stage.groups)} pieces", icon='CHECKMARK')
                 else:
-                    layout.label(text=f"Select pieces: {len(stage.groups) if stage else 0}")
-            controls = layout.box()
-            controls.prop(scene, "snap_uv_controls_expanded", text="Controls",
-                          icon='TRIA_DOWN' if scene.snap_uv_controls_expanded else 'TRIA_RIGHT', emboss=False)
-            if scene.snap_uv_controls_expanded:
-                if scene.snap_uv_easy_mode:
-                    if scene.snap_uv_easy_variant == 'SELECT':
-                        if stage is not None and stage.confirmed:
-                            controls.label(text="Enter / Space / cell click: apply cell")
-                            if scene.snap_uv_easy_drag_gradient:
-                                controls.label(text="LMB: paint / drag: gradient on selection")
-                                controls.label(text="Backspace: edit selection / Esc: clear")
-                            else:
-                                controls.label(text="LMB: next selection / Shift: subtract")
-                            controls.label(text="L / Shift+L: linked select / deselect")
-                        else:
-                            controls.label(text="LMB drag: add / Shift: subtract")
-                            controls.label(text="Enter / Space / cell click: paint")
-                            controls.label(text="Tab + LMB: gradient on selection")
-                    else:
-                        controls.label(text="Shift + mesh click: collect pieces")
-                        controls.label(text="Shift + Ctrl/Cmd + click: subtract")
-                        controls.label(text="Enter / Space: confirm set for painting")
-                        controls.label(text="Esc / RMB: clear set, return to Automatic")
-                        controls.label(text="Mesh click: paint and select piece")
-                        if scene.snap_uv_easy_drag_gradient:
-                            controls.label(text="LMB drag: gradient / click applies on release")
-                            if scene.snap_uv_path_style == 'BEZIER':
-                                controls.label(text="Drag: two-point curve / Tab: multiple points")
-                        controls.label(text="Cell click: recolor selected pieces")
-                controls.label(text="Alt/Option + cell: Project from View")
-                controls.label(text="Replaces gradient on selected pieces")
-                controls.label(text="Works on the current cell too")
-                controls.label(text="Shift + Ctrl/Cmd + cell: Select UVs")
-                controls.label(text="LMB drag in UV: Box Select")
-                controls.label(text="Shift/Ctrl + drag: Add/Subtract")
-                if scene.snap_uv_path_style == 'CIRCLE':
-                    controls.label(text="Tab + drag: circle center / radius")
-                    controls.label(text="Drag axis handles: ellipse")
-                elif scene.snap_uv_path_style == 'RADIAL':
-                    controls.label(text="Tab + drag: start point / radius")
-                    controls.label(text="Drag center: move / rim: radius")
-                elif scene.snap_uv_path_style == 'BEZIER':
-                    controls.label(text="Hold Tab: click/drag curve points")
-                    controls.label(text="Release Tab: finish curve")
-                else:
-                    controls.label(text="Tab + LMB: draw path")
-                if scene.snap_uv_show_gradients:
-                    controls.label(text="Cyan: move / Purple: rotate")
-                    controls.label(text="White points: edit shape")
-                controls.label(text="F8: toggle gradient snapping")
-                controls.label(text="Ctrl/Cmd+Z: undo / Shift: redo")
-                controls.label(text="Shift + cell: radial")
-                controls.label(text="Ctrl/Cmd + cell: cavity")
-                if scene.snap_uv_easy_mode:
-                    controls.label(text="RMB / Esc: clear selection, keep painting")
-                    if scene.snap_uv_easy_variant == 'SELECT':
-                        controls.label(text="Empty click: clear selection")
-                    controls.label(text="Stop Painting button: exit")
-                else:
-                    controls.label(text="RMB or Esc: stop")
-            layout.operator("uv.stop_painting", text="Stop Painting")
+                    col.label(text=f"Selecting pieces: {len(stage.groups) if stage else 0}", icon='RESTRICT_SELECT_OFF')
+            if any(scene.snap_uv_symmetry):
+                axes = "".join(name for axis, name in enumerate("XYZ") if scene.snap_uv_symmetry[axis])
+                col.label(text=f"Symmetry: {axes}", icon='MOD_MIRROR')
+            row = layout.row()
+            row.scale_y = 1.4
+            row.operator("uv.stop_painting", text="Stop Painting", icon='CANCEL')
         else:
             edit_mesh = context.edit_object
-            if edit_mesh is None or edit_mesh.type != 'MESH':
-                layout.label(text="Enter Mesh Edit Mode to paint", icon='INFO')
+            usable = edit_mesh is not None and edit_mesh.type == 'MESH'
+            if not usable:
+                layout.label(text="Enter Edit Mode on a mesh", icon='INFO')
             row = layout.row()
-            row.enabled = edit_mesh is not None and edit_mesh.type == 'MESH'
-            row.operator("uv.draw_path_gradient", text="Start Painting")
+            row.scale_y = 1.4
+            row.enabled = usable
+            row.operator("uv.draw_path_gradient", text="Start Painting", icon='BRUSH_DATA')
+
+
+class PigmiSubPanel:
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Snap UV"
+    bl_parent_id = "UV_PT_snap_to_grid_panel"
+
+
+class UV_PT_pigmi_painting(PigmiSubPanel, bpy.types.Panel):
+    bl_label = "Painting"
+    bl_order = 1
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        scene = context.scene
+        col = layout.column()
+        col.prop(scene, "snap_uv_easy_mode")
+        if scene.snap_uv_easy_mode:
+            sub = col.column()
+            sub.prop(scene, "snap_uv_easy_variant")
+            sub.prop(scene, "snap_uv_easy_drag_gradient", text="Drag Draws Gradient")
+            sub.prop(scene, "snap_uv_easy_through", text="Occluded Pieces")
+        layout.separator()
+        col = layout.column()
+        col.prop(scene, "snap_uv_path_style", text="Gradient Path")
+        col.prop(scene, "snap_uv_gradient_direction", text="Direction")
+        if scene.snap_uv_path_style == 'FREEHAND':
+            col.prop(scene, "snap_uv_path_stabilizer", text="Stabilizer")
+        col = layout.column(heading="Gradient")
+        col.prop(scene, "snap_uv_gradient_snap", text="Snap Points")
+        col.prop(scene, "snap_uv_show_gradients", text="Show Handles")
+
+
+class UV_PT_pigmi_symmetry(PigmiSubPanel, bpy.types.Panel):
+    bl_label = "Symmetry"
+    bl_order = 2
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        row = layout.row(align=True)
+        row.scale_y = 1.2
+        for axis, name in enumerate("XYZ"):
+            row.prop(scene, "snap_uv_symmetry", index=axis, text=name, toggle=True)
+        hint = layout.column(align=True)
+        hint.scale_y = 0.8
+        hint.label(text="Every paint action is mirrored")
+        hint.label(text="across the object's own axes.")
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        sub = layout.column()
+        sub.active = any(scene.snap_uv_symmetry)
+        sub.prop(scene, "snap_uv_symmetry_tolerance", text="Tolerance")
+
+
+class UV_PT_pigmi_matching(PigmiSubPanel, bpy.types.Panel):
+    bl_label = "Copy to Matching Pieces"
+    bl_order = 3
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        session = active_match_session
+        try:
+            total = len(session.matches) if session is not None else None
+            included = total - len(session.excluded) if session is not None else 0
+        except ReferenceError:
+            total = None
+        if total is not None:
+            box = layout.box()
+            box.label(text=f"Included: {included} / {total} pieces", icon='CHECKMARK')
+            hint = box.column(align=True)
+            hint.scale_y = 0.8
+            hint.label(text="Click blue / red pieces in the")
+            hint.label(text="viewport to include or exclude them.")
+            row = box.row()
+            row.scale_y = 1.4
+            row.operator("uv.pigmi_matching_action", text="Apply", icon='CHECKMARK').action = 'APPLY'
+            row = box.row(align=True)
+            row.operator("uv.pigmi_matching_action", text="Select Them",
+                         icon='RESTRICT_SELECT_OFF').action = 'SELECT'
+            row.operator("uv.pigmi_matching_action", text="Cancel", icon='X').action = 'CANCEL'
+        else:
+            hint = layout.column(align=True)
+            hint.scale_y = 0.8
+            hint.label(text="Select a painted piece, then copy")
+            hint.label(text="its UVs to every identical piece.")
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        col = layout.column()
+        col.prop(scene, "snap_uv_match_scope", text="Piece")
+        col = layout.column(heading="Also Find")
+        col.prop(scene, "snap_uv_match_mirror", text="Mirror Copies")
+        col.prop(scene, "snap_uv_match_scale", text="Scaled Copies")
+        layout.prop(scene, "snap_uv_match_tolerance", text="Tolerance")
+        if total is None:
+            row = layout.row()
+            row.scale_y = 1.4
+            row.enabled = context.edit_object is not None and context.edit_object.type == 'MESH'
+            row.operator("uv.pigmi_copy_to_matching", text="Copy UVs to Matching", icon='MOD_ARRAY')
+
+
+class UV_PT_pigmi_grid(PigmiSubPanel, bpy.types.Panel):
+    bl_label = "Palette Grid"
+    bl_order = 4
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        scene = context.scene
+        col = layout.column(align=True)
+        col.prop(scene, "snap_uv_texture_width", text="Texture Width")
+        col.prop(scene, "snap_uv_texture_height", text="Height")
+        col = layout.column(align=True)
+        col.prop(scene, "snap_uv_cell_width", text="Cell Width")
+        col.prop(scene, "snap_uv_cell_height", text="Height")
+        col = layout.column(align=True)
+        col.prop(scene, "snap_uv_margin_x", text="Cell Margin X")
+        col.prop(scene, "snap_uv_margin_y", text="Y")
+        columns = scene.snap_uv_texture_width // max(1, scene.snap_uv_cell_width)
+        rows = scene.snap_uv_texture_height // max(1, scene.snap_uv_cell_height)
+        layout.label(text=f"{columns} x {rows} cells", icon='MESH_GRID')
+
+
+class UV_PT_pigmi_fitting(PigmiSubPanel, bpy.types.Panel):
+    bl_label = "Cell Fitting"
+    bl_order = 5
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        scene = context.scene
+        col = layout.column(heading="When Moving to a Cell")
+        col.prop(scene, "snap_uv_preserve", text="Keep Previous Fit")
+        col.prop(scene, "snap_uv_independent", text="Each Island Separately")
+
+
+class UV_PT_pigmi_cavity(PigmiSubPanel, bpy.types.Panel):
+    bl_label = "Cavity / Fake AO"
+    bl_order = 6
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        hint = layout.column(align=True)
+        hint.scale_y = 0.8
+        hint.label(text="Ctrl/Cmd + cell click applies it.")
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        scene = context.scene
+        col = layout.column(align=True)
+        col.prop(scene, "snap_uv_cavity_strength", text="Cavity")
+        col.prop(scene, "snap_uv_cavity_contrast", text="Contrast")
+        col.prop(scene, "snap_uv_cavity_bias", text="Bias")
+        col.prop(scene, "snap_uv_cavity_smooth", text="Smooth")
+        col = layout.column(align=True)
+        col.prop(scene, "snap_uv_edge_strength", text="Edge Strength")
+        col.prop(scene, "snap_uv_edge_threshold", text="Threshold")
+        col.prop(scene, "snap_uv_edge_falloff", text="Falloff")
+        col = layout.column()
+        col.prop(scene, "snap_uv_cavity_invert", text="Invert")
+        col.prop(scene, "snap_uv_cavity_auto_preview", text="Auto Preview")
+
+
+class UV_PT_pigmi_shortcuts(PigmiSubPanel, bpy.types.Panel):
+    bl_label = "Shortcuts"
+    bl_order = 7
+    bl_options = {'DEFAULT_CLOSED'}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+
+        def section(title, lines):
+            col = layout.column(align=True)
+            col.label(text=title)
+            for line in lines:
+                row = col.row()
+                row.scale_y = 0.8
+                row.label(text="   " + line)
+            layout.separator(factor=0.5)
+
+        if not PIGMI_STATE.painting_active:
+            layout.label(text="Available while painting", icon='INFO')
+        section("Palette cell (UV Editor)", (
+            "Click: put selection in cell",
+            "Alt/Option + click: project from view",
+            "Shift + click: radial gradient",
+            "Ctrl/Cmd + click: cavity",
+            "Shift + Ctrl/Cmd + click: select cell UVs",
+            "Drag: box select (Shift add, Ctrl sub)",
+        ))
+        style = scene.snap_uv_path_style
+        if style == 'CIRCLE':
+            gradient = ["Tab + drag: circle center / radius", "Drag axis handles: ellipse"]
+        elif style == 'RADIAL':
+            gradient = ["Tab + drag: start point / radius", "Drag center: move, rim: radius"]
+        elif style == 'BEZIER':
+            gradient = ["Hold Tab: click/drag curve points", "Release Tab: finish curve"]
+        else:
+            gradient = ["Tab + LMB drag: draw path"]
+        if scene.snap_uv_show_gradients:
+            gradient += ["Cyan: move, purple: rotate", "White points: edit shape"]
+        gradient.append("F8: toggle snapping")
+        section("Gradients (3D View)", gradient)
+        if scene.snap_uv_easy_mode:
+            if scene.snap_uv_easy_variant == 'SELECT':
+                lines = ["LMB drag: add pieces, Shift: subtract",
+                         "Enter / Space / cell click: paint",
+                         "Tab + LMB: gradient on selection",
+                         "Backspace: edit selection",
+                         "L / Shift+L: linked select / deselect",
+                         "Empty click: clear selection"]
+                if scene.snap_uv_easy_drag_gradient:
+                    lines.insert(2, "LMB drag on set: gradient")
+            else:
+                lines = ["Mesh click: paint and select piece",
+                         "Shift + click: collect pieces",
+                         "Shift + Ctrl/Cmd + click: subtract",
+                         "Enter / Space: confirm set",
+                         "Cell click: recolor selected pieces"]
+                if scene.snap_uv_easy_drag_gradient:
+                    lines.append("LMB drag: gradient, click on release")
+                    if style == 'BEZIER':
+                        lines.append("Drag: 2-point curve, Tab: more points")
+            section("Easy Mode", lines)
+        if scene.snap_uv_easy_mode:
+            session = ["Ctrl/Cmd + Z: undo, + Shift: redo",
+                       "RMB / Esc: clear selection",
+                       "Stop Painting button: exit"]
+        else:
+            session = ["Ctrl/Cmd + Z: undo, + Shift: redo",
+                       "RMB / Esc / Enter: stop"]
+        section("Session", session)
+        section("Copy to Matching", (
+            "LMB / drag: include or exclude",
+            "A: all, Alt+A: none, Ctrl/Cmd+I: invert",
+            "Enter / Space: apply, S: select them",
+            "Esc / RMB: cancel",
+        ))
 
 
 # --- Registration ---
@@ -5559,7 +6623,16 @@ classes = (
     UV_OT_clear_path_gradient,
     UV_OT_stop_painting,
     UV_OT_snap_to_grid,
+    UV_OT_copy_to_matching,
+    UV_OT_matching_action,
     UV_PT_snap_to_grid_panel,
+    UV_PT_pigmi_painting,
+    UV_PT_pigmi_symmetry,
+    UV_PT_pigmi_matching,
+    UV_PT_pigmi_grid,
+    UV_PT_pigmi_fitting,
+    UV_PT_pigmi_cavity,
+    UV_PT_pigmi_shortcuts,
 )
 
 _LOAD_HANDLERS = (
@@ -5589,6 +6662,7 @@ def unregister():
             handlers.remove(handler)
     remove_path_gradient_overlay()
     remove_uv_box_overlay()
+    remove_match_overlay()
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     clear_properties()
